@@ -1,0 +1,4 @@
+# Open Mapple defconfig for the realme X2 (x2, Qualcomm SM7150 (Snapdragon 730G)): the common Qualcomm kernel's
+# configuration (MASTER.arm64.sweet) and this phone's own.
+#include common_defconfig
+#include x2.config

@@ -1,0 +1,25 @@
+diff --git a/shim/qcom/build.sh b/shim/qcom/build.sh
+index 997f021..3edd8f3 100755
+--- a/shim/qcom/build.sh
++++ b/shim/qcom/build.sh
+@@ -13,6 +13,7 @@ CFLAGS="--target=aarch64-none-elf -O2 -ffreestanding -nostdlib -fno-pic -mgenera
+ case $BOARD in
+ sweet) ;;
+ sunfish) CFLAGS="$CFLAGS -DBOARD_SUNFISH" ;;
++x2) CFLAGS="$CFLAGS -DBOARD_X2" ;;
+ *) echo "unknown BOARD=$BOARD" >&2; exit 1 ;;
+ esac
+ LLD=${LLD:-ld.lld}
+diff --git a/shim/qcom/console.h b/shim/qcom/console.h
+index f834f43..bfd45e1 100644
+--- a/shim/qcom/console.h
++++ b/shim/qcom/console.h
+@@ -8,7 +8,7 @@
+  */
+ #define FB_DEF_BASE	0x9c000000UL
+ #define FB_DEF_W	1080
+-#ifdef BOARD_SUNFISH
++#if defined(BOARD_SUNFISH) || defined(BOARD_X2)
+ #define FB_DEF_H	2340		/* Pixel 4a, sofef01 cmd-mode panel */
+ #else
+ #define FB_DEF_H	2400		/* sweet, DSC video-mode panel */

@@ -1,0 +1,100 @@
+name: xnu-open-mapple
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_config:
+        description: RELEASE / DEVELOPMENT / DEBUG
+        default: DEVELOPMENT
+      keep_going:
+        description: make -k (collect all compile errors in one run)
+        default: "true"
+  push:
+    branches: [main]
+    paths:
+      - "patches/**"
+      - ".github/workflows/xnu.yml"
+
+concurrency:
+  group: xnu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DXB_REPO: https://github.com/blacktop/darwin-xnu-build
+  DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+  QCOM_KERNEL_REPO: https://github.com
+  MACOS_VERSION: "13.5"
+  KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+  MACHINE_CONFIG: SWEET
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch darwin-xnu-build and xnu_kernel_qcom_common
+        run: |
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_SHA"
+          git -C dxb checkout -q FETCH_HEAD
+          # arm64 (non-PAC) kernel needs libfirehose for arm64 too
+          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
+          grep -q 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
+
+          # Populate dxb/xnu directly from Open Mapple's pre-patched Qualcomm tree
+          git clone --depth 1 "$QCOM_KERNEL_REPO" dxb/xnu
+
+          # Apply Realme X2 touch (Synaptics S3706) & RPMh rail patches if present
+          if ls patches/*.patch >/dev/null 2>&1; then
+            for p in patches/*.patch; do
+              echo "Applying $p"
+              git -C dxb/xnu apply "$GITHUB_WORKSPACE/$p"
+            done
+          fi
+
+          # Neutralize builder string and prefix-map paths just like mka.sh
+          sed -i '' 's/^my \$BUILDER=`whoami`;/my $BUILDER="openmapple";/' dxb/xnu/config/newvers.pl
+
+      - name: Setup Xcode 15 and SDK headers
+        run: |
+          brew install jq bash cmake ninja
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes
+          XC=$(ls -d /Applications/Xcode_15*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcrun --find iig
+
+          # Copy TargetConditionals.h for -nostdinc staged libpthread and HFS
+          SDK=$(xcrun --sdk macosx --show-sdk-path)
+          for d in bsd/pthread/sweet_libpthread bsd/sweet_hfs; do
+            cp "$SDK/usr/include/TargetConditionals.h" "dxb/xnu/$d/"
+          done
+
+      - name: Build XNU kernel
+        working-directory: dxb
+        env:
+          ARCH_CONFIG: ARM64
+          RC_NONARCH_CFLAGS: -ffile-prefix-map=${{ github.workspace }}/dxb=/openmapple
+          MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
+        run: bash build.sh
+
+      - name: Collect kernel artifact
+        if: always()
+        run: |
+          mkdir -p out
+          cp -R dxb/build/xnu.obj/kernel.* out/ 2>/dev/null || true
+          cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
+          ls -la out
+          (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xnu-kernel-x2
+          path: out/
+          if-no-files-found: warn
