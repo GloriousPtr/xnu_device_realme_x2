@@ -22,7 +22,6 @@ concurrency:
 env:
   DXB_REPO: https://github.com/blacktop/darwin-xnu-build
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
-  QCOM_KERNEL_REPO: https://github.com
   MACOS_VERSION: "13.5"
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
   MACHINE_CONFIG: SWEET
@@ -46,9 +45,9 @@ jobs:
           # Populate dxb/xnu directly from Open Mapple's pre-patched Qualcomm tree
           git clone --depth 1 https://github.com/open-mapple/xnu_kernel_qcom_common.git dxb/xnu
 
-          # Apply Realme X2 touch (Synaptics S3706) & RPMh rail patches if present
-          if ls patches/*.patch >/dev/null 2>&1; then
-            for p in patches/*.patch; do
+          # Apply Realme X2 kernel patches (touch + RPMh) to dxb/xnu; skip loader/build patches
+          if ls patches/*kernel*.patch >/dev/null 2>&1; then
+            for p in patches/*kernel*.patch; do
               echo "Applying $p"
               git -C dxb/xnu apply "$GITHUB_WORKSPACE/$p"
             done
