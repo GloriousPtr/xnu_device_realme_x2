@@ -1,0 +1,13 @@
+diff --git a/bsd/dev/sweet_zap.c b/bsd/dev/sweet_zap.c
+index 41882ca..41f8cac 100644
+--- a/bsd/dev/sweet_zap.c
++++ b/bsd/dev/sweet_zap.c
+@@ -54,7 +54,7 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ 
+ /* The zap: a6xx GPU_PAS_ID and the Pixel DT's GPU zap carve-out */
+ #define ZAP_PAS_ID              13u
+-#define ZAP_CARVEOUT_PA         0x97715000u
++#define ZAP_CARVEOUT_PA         0xb8315000u
+ #define ZAP_CARVEOUT_SIZE       0x2000u
+ #define ZAP_MD_AREA             0x2000u         /* the metadata copy in GPU-GMU-MEM */
+ 
