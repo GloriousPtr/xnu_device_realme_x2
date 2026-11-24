@@ -1,5 +1,5 @@
 diff --git a/iokit/Kernel/arm/SweetGPUClient.cpp b/iokit/Kernel/arm/SweetGPUClient.cpp
-index 199105b..7d6bae1 100644
+index 199105b..780b389 100644
 --- a/iokit/Kernel/arm/SweetGPUClient.cpp
 +++ b/iokit/Kernel/arm/SweetGPUClient.cpp
 @@ -2,11 +2,6 @@
@@ -502,7 +502,7 @@ index 199105b..7d6bae1 100644
  IOReturn
  SweetGPUClient::queueNew(IOExternalMethodArguments *args)
  {
-@@ -460,49 +576,49 @@ SweetGPUClient::queueNew(IOExternalMethodArguments *args)
+@@ -460,12 +576,10 @@ SweetGPUClient::queueNew(IOExternalMethodArguments *args)
  	IOLockUnlock(fLock);
  	return sg_out(args, &q) ? kIOReturnSuccess : kIOReturnBadArgument;
  }
@@ -517,8 +517,7 @@ index 199105b..7d6bae1 100644
  {
  	uint64_t *seen = &sweet_gpu_logged[(selector >> 6) & 1u];
  	if (!(*seen & (1ull << (selector & 63u)))) {
--		*seen |= 1ull << (selector & 63u);
-+		seen |= 1ull << (selector & 63u);
+@@ -473,36 +587,38 @@ SweetGPUClient::externalMethod(uint32_t selector, IOExternalMethodArguments *arg
  		IOLog("SWEET GPU: selector %#x\n", selector);
  	}
  	switch (selector) {
@@ -586,8 +585,7 @@ index 199105b..7d6bae1 100644
 +			return kIOReturnUnsupported;
  	}
  }
--#endif /* ARM64_BOARD_CONFIG_SWEET */
-+#endif / ARM64_BOARD_CONFIG_SWEET */
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/iokit/Kernel/arm/sweet_msm.h b/iokit/Kernel/arm/sweet_msm.h
 index 5bd0c10..9009f29 100644
 --- a/iokit/Kernel/arm/sweet_msm.h
