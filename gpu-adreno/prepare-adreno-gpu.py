@@ -45,7 +45,7 @@ b = open(p_sh).read()
 b = b.replace('  [ -x "$GPU/mesa/build-macos/src/panfrost/clc/panfrost_compile" ] || bash "$GPU/mesa/build.sh" macos-nosmoke\n',
               '  bash "$GPU/mesa/build.sh" fn setup_venv fetch_and_patch\n')
 b = b.replace('-Dgallium-drivers=panfrost', '-Dgallium-drivers=freedreno')
-b = b.replace('-Dmesa-clc=system -Dprecomp-compiler=system', '-Dmesa-clc=disabled -Dprecomp-compiler=disabled')
+b = b.replace('-Dmesa-clc=system -Dprecomp-compiler=system', '-Dmesa-clc=auto -Dprecomp-compiler=auto')
 old_targets = '''  local targets
   targets="$(bash "$GPU/mesa/build.sh" fn mesa_libs 2>/dev/null | grep -v -i 'llvmpipe\\|gallivm\\|null_sw' || true)"'''
 new_targets = '''  local targets="
