@@ -44,7 +44,7 @@ jobs:
           grep -q 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
 
           # Populate dxb/xnu directly from Open Mapple's pre-patched Qualcomm tree
-          git clone --depth 1 "$QCOM_KERNEL_REPO" dxb/xnu
+          git clone --depth 1 https://github.com/open-mapple/xnu_kernel_qcom_common.git dxb/xnu
 
           # Apply Realme X2 touch (Synaptics S3706) & RPMh rail patches if present
           if ls patches/*.patch >/dev/null 2>&1; then
