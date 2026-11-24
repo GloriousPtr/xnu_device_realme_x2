@@ -1,0 +1,19 @@
+diff --git a/bsd/dev/sweet_rpmh.c b/bsd/dev/sweet_rpmh.c
+index d5af28b..68862dc 100644
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -354,8 +354,12 @@ int
+ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ {
+ 	/* Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources. */
+-	if (!res || strcmp(res, "ldoc11") || mv < 2950 || mv > 3400) {
+-		printf("SWEET RPMH: expected ldoc11 and 2950..3400 mV\n");
++	bool ok = res && (
++		(!strcmp(res, "ldoc11") && mv >= 2950 && mv <= 3400) ||
++		(!strcmp(res, "ldoc7") && mv >= 2950 && mv <= 3400) ||
++		(!strcmp(res, "ldoa12") && mv >= 1700 && mv <= 1950));
++	if (!ok) {
++		printf("SWEET RPMH: rejected %s at %u mV\n", res ? res : "(null)", mv);
+ 		return EINVAL;
+ 	}
+ 	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
