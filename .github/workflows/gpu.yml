@@ -1,0 +1,52 @@
+name: adreno-metal-driver
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "gpu-adreno/**"
+      - ".github/workflows/gpu.yml"
+
+jobs:
+  build-gpu:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Xcode 15 and Homebrew tools
+        run: |
+          brew install pkgconf
+          XC=$(ls -d /Applications/Xcode_15*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Clone mapple_gpu_mali and apply Adreno freedreno overlay
+        run: |
+          git clone --depth 1 https://github.com/open-mapple/mapple_gpu_mali gpu
+          python3 gpu-adreno/prepare-adreno-gpu.py "$PWD/gpu"
+
+      - name: Build Mesa (freedreno) + MappleMTLDriver.bundle for iOS 16
+        run: |
+          bash gpu/ios/build.sh mesa
+          I="$PWD/gpu/mesa/src"
+          B="$PWD/gpu/mesa/build-ios"
+          cat > gpu/ios/out/cflags.txt <<EOC
+          -DNDEBUG -D__APPLE__ -DHAVE_STRUCT_TIMESPEC -DHAVE_PTHREAD -DHAVE_ENDIAN_H -DHAVE_DLFCN_H -DHAVE_SYS_SYSCTL_H
+          -I$I/include -I$I/src -I$B/src
+          -I$I/src/gallium/include -I$I/src/gallium/auxiliary -I$B/src/gallium/auxiliary
+          -I$I/src/gallium/drivers -I$I/src/gallium/winsys
+          -I$I/src/compiler -I$B/src/compiler -I$I/src/compiler/nir -I$I/src/compiler/nir
+          -I$I/src/freedreno -I$B/src/freedreno -I$I/src/freedreno/common -I$B/src/freedreno/registers
+          EOC
+          bash gpu/ios/build.sh driver
+
+      - name: Upload MappleMTLDriver.bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MappleMTLDriver-adreno-x2
+          path: gpu/ios/out/MappleMTLDriver.bundle/

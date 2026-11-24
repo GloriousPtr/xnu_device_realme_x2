@@ -1,0 +1,63 @@
+--- a/meson.build
++++ b/meson.build
+@@ -993,6 +993,7 @@ if with_gallium_rusticl or with_microsoft_clc
+ endif
+
+ with_gfx_compute = [
++  with_gallium_freedreno,
+   with_any_opengl,
+   with_any_vk,
+   with_clc,
+@@ -1930,12 +1931,15 @@ if system_has_kms_drm
+       'amdgpu' : _libdrm_checks ? 'enabled' : 'disabled',
+     },
+   )
++elif host_machine.system() == 'darwin' and with_gallium_freedreno
++  dep_libdrm = dependency('libdrm', version : '>=' + _drm_ver, required : true)
+ else
+   # We should prevent libdrm from being available when the target doesn't have it to avoid transitive
+   # dependencies (such as vk-runtime) linking to it
+   dep_libdrm = null_dep
+ endif
+-if dep_libdrm.found()
++if dep_libdrm.found() and host_machine.system() != 'darwin'
+   pre_args += '-DHAVE_LIBDRM'
+   if with_dri_platform == 'drm' and with_dri
+     with_gallium_drisw_kms = true
+--- a/src/util/meson.build
++++ b/src/util/meson.build
+@@ -314,7 +314,7 @@ deps_for_libmesa_util = [
+   idep_mesautilformat,
+ ]
+
+-if dep_libdrm.found()
++if dep_libdrm.found() and host_machine.system() != 'darwin'
+   files_mesa_util += files('u_sync_provider.c', 'u_sync_provider.h')
+   deps_for_libmesa_util += dep_libdrm
+ endif
+--- a/src/freedreno/drm/freedreno_bo.c
++++ b/src/freedreno/drm/freedreno_bo.c
+@@ -474,7 +474,11 @@ bo_del(struct fd_bo *bo)
+    simple_mtx_assert_locked(&table_lock);
+
+    if (bo->map) {
++#ifdef __APPLE__
++      drmUnmap(bo->map, bo->size);
++#else
+       os_munmap(bo->map, bo->size);
++#endif
+       bo->map = NULL;
+    }
+
+@@ -618,8 +622,14 @@ fd_bo_map_os_mmap(struct fd_bo *bo)
+    if (offset < 0)
+       return NULL;
+
++#ifdef __APPLE__
++   drmAddress addr = NULL;
++   return drmMap(bo->dev->fd, (drm_handle_t)offset, bo->size, &addr) ? NULL : addr;
++#else
+    return os_mmap(0, bo->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                   bo->dev->fd, offset);
++#endif
+ }
