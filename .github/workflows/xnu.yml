@@ -28,7 +28,7 @@ env:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -86,8 +86,10 @@ jobs:
         if: always()
         run: |
           mkdir -p out
-          cp -R dxb/build/xnu.obj/kernel.* out/ 2>/dev/null || true
-          cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
+          cp -L dxb/build/xnu.obj/DEVELOPMENT_ARM64_SWEET/kernel.* out/ 2>/dev/null || true
+          cp -L dxb/build/xnu.obj/RELEASE_ARM64_SWEET/kernel.* out/ 2>/dev/null || true
+          cp -RL dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
+          rm -rf out/*.dSYM
           ls -la out
           (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
 
