@@ -1,21 +1,27 @@
+diff --git a/meson.build b/meson.build
+index 37f2fd4..ecdbeff 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -993,6 +993,7 @@ if with_gallium_rusticl or with_microsoft_clc
+@@ -163,7 +163,9 @@ system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'gnu/kfreebsd', 'dragonfly
+ 
+ gallium_drivers = get_option('gallium-drivers')
+ if gallium_drivers.contains('auto')
+-  if system_has_kms_drm
++  if host_machine.system() == 'darwin' and with_gallium_freedreno
++  dep_libdrm = dependency('libdrm', version : '>=' + _drm_ver, required : true)
++elif system_has_kms_drm
+     # TODO: Sparc
+     # TODO: handle llvm being disabled or auto when setting default_drivers
+     if ['x86', 'x86_64'].contains(host_machine.cpu_family())
+@@ -993,6 +995,7 @@ if with_gallium_rusticl or with_microsoft_clc
  endif
-
+ 
  with_gfx_compute = [
 +  with_gallium_freedreno,
    with_any_opengl,
    with_any_vk,
    with_clc,
-@@ -1930,12 +1931,15 @@ if system_has_kms_drm
-       'amdgpu' : _libdrm_checks ? 'enabled' : 'disabled',
-     },
-   )
-+elif host_machine.system() == 'darwin' and with_gallium_freedreno
-+  dep_libdrm = dependency('libdrm', version : '>=' + _drm_ver, required : true)
- else
-   # We should prevent libdrm from being available when the target doesn't have it to avoid transitive
+@@ -1935,7 +1938,7 @@ else
    # dependencies (such as vk-runtime) linking to it
    dep_libdrm = null_dep
  endif
@@ -24,35 +30,26 @@
    pre_args += '-DHAVE_LIBDRM'
    if with_dri_platform == 'drm' and with_dri
      with_gallium_drisw_kms = true
---- a/src/util/meson.build
-+++ b/src/util/meson.build
-@@ -314,7 +314,7 @@ deps_for_libmesa_util = [
-   idep_mesautilformat,
- ]
-
--if dep_libdrm.found()
-+if dep_libdrm.found() and host_machine.system() != 'darwin'
-   files_mesa_util += files('u_sync_provider.c', 'u_sync_provider.h')
-   deps_for_libmesa_util += dep_libdrm
- endif
+diff --git a/src/freedreno/drm/freedreno_bo.c b/src/freedreno/drm/freedreno_bo.c
+index 6eda810..4204683 100644
 --- a/src/freedreno/drm/freedreno_bo.c
 +++ b/src/freedreno/drm/freedreno_bo.c
-@@ -474,7 +474,11 @@ bo_del(struct fd_bo *bo)
-    simple_mtx_assert_locked(&table_lock);
-
-    if (bo->map) {
+@@ -474,7 +474,11 @@ fd_bo_fini_common(struct fd_bo *bo)
+    fd_bo_fini_fences(bo);
+ 
+    if (bo->map)
 +#ifdef __APPLE__
 +      drmUnmap(bo->map, bo->size);
 +#else
        os_munmap(bo->map, bo->size);
 +#endif
-       bo->map = NULL;
-    }
-
-@@ -618,8 +622,14 @@ fd_bo_map_os_mmap(struct fd_bo *bo)
-    if (offset < 0)
+ 
+    if (handle) {
+       simple_mtx_lock(&table_lock);
+@@ -618,8 +622,13 @@ fd_bo_map_os_mmap(struct fd_bo *bo)
+    if (ret) {
        return NULL;
-
+    }
 +#ifdef __APPLE__
 +   drmAddress addr = NULL;
 +   return drmMap(bo->dev->fd, (drm_handle_t)offset, bo->size, &addr) ? NULL : addr;
@@ -61,3 +58,18 @@
                    bo->dev->fd, offset);
 +#endif
  }
+ 
+ /* For internal use only, does not check FD_BO_NOMAP: */
+diff --git a/src/util/meson.build b/src/util/meson.build
+index b11f0c4..ed9adb8 100644
+--- a/src/util/meson.build
++++ b/src/util/meson.build
+@@ -314,7 +314,7 @@ deps_for_libmesa_util = [
+   idep_mesautilformat,
+ ]
+ 
+-if dep_libdrm.found()
++if dep_libdrm.found() and host_machine.system() != 'darwin'
+   files_mesa_util += files('u_sync_provider.c', 'u_sync_provider.h')
+   deps_for_libmesa_util += dep_libdrm
+ endif
