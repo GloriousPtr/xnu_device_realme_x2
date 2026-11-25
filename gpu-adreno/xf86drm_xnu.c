@@ -13,7 +13,14 @@
 #include "xf86drm.h"
 #include "libdrm/drm.h"
 #include "../../uapi/sweet_msm.h"
-#include "../../vgpu/vgpu.h"
+int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);
+void *vgpu_mmap(int fd, uint64_t token, size_t size);
+int vgpu_munmap(int fd, void *addr, size_t size);
+
+int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);
+void *vgpu_mmap(int fd, uint64_t token, size_t size);
+int vgpu_munmap(int fd, void *addr, size_t size);
+
 
 
 static int ret_errno(int r) { if (r < 0) { errno = -r; return -1; } return r; }
