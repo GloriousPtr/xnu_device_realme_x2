@@ -178,7 +178,7 @@ const char *const vmg_isa_feature_name[VMG_ISA_FEATURE_COUNT] = { 0 };
 void vmg_isa_options_from_env(vmg_isa_options *o) { memset(o, 0, sizeof(*o)); }
 void vmg_isa_options_key(const vmg_isa_options *o, char *buf, size_t size) { (void)o; if (size) buf[0] = 0; }
 void vmg_isa_get_stats(vmg_isa_stats *out) { memset(out, 0, sizeof(*out)); }
-void vmg_isa_counters(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d) { (void)a; (void)b; (void)c; (void)d; }
+void vmg_isa_counters(uint64_t *a, uint64_t *b, uint64_t *c, char *d, size_t e) { (void)a; (void)b; (void)c; if (d && e) d[0] = 0; }
 struct vmg_isa_program *vmg_isa_compile(const vmg_air_input *in, const vmg_isa_options *opt, uint64_t gpu_id, uint32_t attached,
                                         vmg_reflection *refl, struct util_dynarray *pool, char **error) {
     (void)in; (void)opt; (void)gpu_id; (void)attached; (void)refl; (void)pool; (void)error; return NULL;
