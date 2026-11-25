@@ -1,6 +1,6 @@
 import os, re, shutil, sys
 
-gpu_dir = sys.argv[1]
+gpu_dir = sys.argv
 overlay = os.path.dirname(os.path.abspath(__file__))
 
 # Replace patches, uapi, vgpu_iokit.c, xf86drm_xnu.c
@@ -11,13 +11,120 @@ shutil.copy(f"{overlay}/sweet_msm.h", f"{gpu_dir}/uapi/sweet_msm.h")
 shutil.copy(f"{overlay}/vgpu_iokit.c", f"{gpu_dir}/vgpu/vgpu_iokit.c")
 shutil.copy(f"{overlay}/xf86drm_xnu.c", f"{gpu_dir}/libdrm-xnu/src/xf86drm_xnu.c")
 
-# Update vmg_screen.c: use fd_drm_screen_create + disable Valhall ISA runtime branch
+# Write self-contained vgpu/vgpu.c so all _vgpu_* symbols are guaranteed present
+open(f"{gpu_dir}/vgpu/vgpu.c", "w").write("""
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+enum vgpu_selector { VGPU_SEL_DUMMY = 0 };
+struct vgpu_backend {
+    const char *name;
+    int (*open)(void **conn);
+    void (*close)(void *conn);
+    int (*ioctl)(void *conn, enum vgpu_selector sel, void *arg, size_t size);
+    void *(*mmap)(void *conn, uint64_t token, size_t size);
+    int (*munmap)(void *conn, void *addr, size_t size);
+};
+extern const struct vgpu_backend vgpu_backend_iokit;
+
+#define MAX_FDS 1024
+static void *g_conn[MAX_FDS];
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic uint64_t g_cnt[32], g_jobs;
+
+const char *vgpu_backend_name(void) { return vgpu_backend_iokit.name; }
+
+int vgpu_open(void)
+{
+    void *conn = NULL;
+    int err = vgpu_backend_iokit.open(&conn);
+    if (err) return err;
+    int fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (fd < 0 || fd >= MAX_FDS) {
+        int e = fd < 0 ? errno : EMFILE;
+        if (fd >= 0) close(fd);
+        vgpu_backend_iokit.close(conn);
+        return -e;
+    }
+    pthread_mutex_lock(&g_lock);
+    g_conn[fd] = conn;
+    pthread_mutex_unlock(&g_lock);
+    return fd;
+}
+
+static void *lookup(int fd)
+{
+    if (fd < 0 || fd >= MAX_FDS) return NULL;
+    pthread_mutex_lock(&g_lock);
+    void *c = g_conn[fd];
+    pthread_mutex_unlock(&g_lock);
+    return c;
+}
+
+bool vgpu_is_fd(int fd) { return lookup(fd) != NULL; }
+
+int vgpu_close(int fd)
+{
+    void *conn = lookup(fd);
+    if (!conn) return -EBADF;
+    pthread_mutex_lock(&g_lock);
+    g_conn[fd] = NULL;
+    pthread_mutex_unlock(&g_lock);
+    vgpu_backend_iokit.close(conn);
+    close(fd);
+    return 0;
+}
+
+void vgpu_counters(uint64_t calls[32], uint64_t *jobs)
+{
+    for (unsigned i = 0; i < 32; i++) calls[i] = atomic_load_explicit(&g_cnt[i], memory_order_relaxed);
+    *jobs = atomic_load_explicit(&g_jobs, memory_order_relaxed);
+}
+
+int vgpu_ioctl(int fd, enum vgpu_selector sel, void *arg)
+{
+    void *conn = lookup(fd);
+    if (!conn || !arg) return conn ? -EINVAL : -EBADF;
+    return vgpu_backend_iokit.ioctl(conn, sel, arg, 0);
+}
+
+int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size)
+{
+    void *conn = lookup(fd);
+    if (!conn) return -EBADF;
+    if (sel == 0x46) atomic_fetch_add_explicit(&g_jobs, 1, memory_order_relaxed);
+    return vgpu_backend_iokit.ioctl(conn, (enum vgpu_selector)sel, arg, size);
+}
+
+void *vgpu_mmap(int fd, uint64_t token, size_t size)
+{
+    void *conn = lookup(fd);
+    if (!conn) { errno = EBADF; return NULL; }
+    return vgpu_backend_iokit.mmap(conn, token, size);
+}
+
+int vgpu_munmap(int fd, void *addr, size_t size)
+{
+    void *conn = lookup(fd);
+    if (!conn) return -EBADF;
+    return vgpu_backend_iokit.munmap(conn, addr, size);
+}
+""")
+
+# Update vmg_screen.c: use fd_drm_screen_create_renderonly + disable Valhall ISA runtime branch
 p_scr = f"{gpu_dir}/driver/vmg_screen.c"
 s = open(p_scr).read()
 decls = (
     '#include "freedreno/drm/freedreno_drm_public.h"\n'
     'struct renderonly;\n'
-    'struct pipe_screen *fd_drm_screen_create(int fd, struct renderonly *ro, const struct pipe_screen_config *config);\n'
+    'struct pipe_screen *fd_drm_screen_create_renderonly(int fd, struct renderonly *ro, const struct pipe_screen_config *config);\n'
     'int vgpu_open(void);\n'
     'int vgpu_close(int fd);\n'
     'const char *vgpu_backend_name(void);\n'
@@ -37,12 +144,61 @@ s = re.sub(
             return NULL;
         }
         struct pipe_screen_config config = { 0 };
-        dev->screen = fd_drm_screen_create(dev->fd, NULL, &config);
+        dev->screen = fd_drm_screen_create_renderonly(dev->fd, NULL, &config);
         dev->panfrost = true;''',
     s, count=1, flags=re.S)
 s = s.replace('if (dev->panfrost) {\n        vmg_isa_options iopt;', 'if (0) {\n        vmg_isa_options iopt;')
 s = s.replace('if (d->fragment && d->fragment->isa_in)', 'if (0 && d->fragment && d->fragment->isa_in)')
 open(p_scr, "w").write(s)
+
+# Provide VGPU_SEL_* constants and vgpu_counters declaration for VMCommands.m / VMShmStats.m
+open(f"{gpu_dir}/driver/metal/vgpu_shim.h", "w").write("""
+#pragma once
+#include <stdint.h>
+enum {
+    VGPU_SEL_CREATE_BO = 1,
+    VGPU_SEL_GEM_CLOSE = 2,
+    VGPU_SEL_WAIT_BO = 3,
+    VGPU_SEL_SYNCOBJ_WAIT = 4,
+    VGPU_SEL_IMPORT_IOSURFACE = 5,
+    VGPU_SEL_COUNT = 32
+};
+void vgpu_counters(uint64_t calls[VGPU_SEL_COUNT], uint64_t *jobs);
+""")
+
+# Replace driver/isa/*.c with a single clean stub file
+for f in os.listdir(f"{gpu_dir}/driver/isa"):
+    if f.endswith(".c"):
+        os.remove(f"{gpu_dir}/driver/isa/{f}")
+open(f"{gpu_dir}/driver/isa/vmg_isa_stub.c", "w").write("""
+#include "vmg_isa.h"
+#include "vmg_isa_api.h"
+#include <string.h>
+const char *const vmg_isa_feature_name[VMG_ISA_FEATURE_COUNT] = { 0 };
+void vmg_isa_options_from_env(vmg_isa_options *o) { memset(o, 0, sizeof(*o)); }
+void vmg_isa_options_key(const vmg_isa_options *o, char *buf, size_t size) { (void)o; if (size) buf = 0; }
+void vmg_isa_get_stats(vmg_isa_stats *out) { memset(out, 0, sizeof(*out)); }
+void vmg_isa_counters(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d) { (void)a; (void)b; (void)c; (void)d; }
+struct vmg_isa_program *vmg_isa_compile(const vmg_air_input *in, const vmg_isa_options *opt, uint64_t gpu_id, uint32_t attached,
+                                        vmg_reflection *refl, struct util_dynarray *pool, char **error) {
+    (void)in; (void)opt; (void)gpu_id; (void)attached; (void)refl; (void)pool; (void)error; return NULL;
+}
+void vmg_isa_program_free(struct vmg_isa_program *p) { (void)p; }
+struct nir_shader *vmg_isa_shell(struct vmg_isa_program *p, const struct nir_shader_compiler_options *options, const vmg_reflection *refl) {
+    (void)p; (void)options; (void)refl; return NULL;
+}
+void vmg_isa_install_hooks(void) {}
+const char *vmg_isa_program_name(const struct vmg_isa_program *p) { (void)p; return ""; }
+int vmg_isa_program_stage(const struct vmg_isa_program *p) { (void)p; return 0; }
+uint64_t vmg_isa_program_features(const struct vmg_isa_program *p) { (void)p; return 0; }
+const void *vmg_isa_program_binary(const struct vmg_isa_program *p, size_t *size) { (void)p; if (size) *size = 0; return NULL; }
+const struct pan_shader_info *vmg_isa_program_info(const struct vmg_isa_program *p) { (void)p; return NULL; }
+void *vmg_isa_program_serialize(const struct vmg_isa_program *p, size_t *size) { (void)p; if (size) *size = 0; return NULL; }
+struct vmg_isa_program *vmg_isa_program_deserialize(const void *data, size_t size) { (void)data; (void)size; return NULL; }
+void vmg_isa_note(bool ok, const char *fn, const char *why, uint64_t us, bool cached) { (void)ok; (void)fn; (void)why; (void)us; (void)cached; }
+void vmg_isa_set_input_hook(vmg_isa_input_hook h) { (void)h; }
+void vmg_isa_program_set_input(struct vmg_isa_program *p, void *input) { (void)p; (void)input; }
+""")
 
 # Update ios/build.sh: build Mesa with freedreno for iOS, skip panfrost_compile
 p_sh = f"{gpu_dir}/ios/build.sh"
@@ -78,75 +234,6 @@ b = b.replace('"$GPU/mesa/out/macos/cflags.txt"', '"$OUT/cflags.txt"')
 b = b.replace('mapple_gpu_uapi.h', 'sweet_msm.h')
 b = b.replace('"$GPU/vgpu/vgpu_mock.c" ', '')
 b = b.replace('-I"$GPU/driver/metal" -I"$GPU/driver"', '-include "$GPU/driver/metal/vgpu_shim.h" -I"$GPU/driver/metal" -I"$GPU/driver"')
-b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  local ih=("$GPU"/driver/isa/*.h)')
-b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  local ih=("$GPU"/driver/isa/*.h)')
 open(p_sh, "w").write(b)
-
-# Add vgpu_ioctl_raw to vgpu.h and vgpu.c for Adreno msm selectors (0x40..0x73)
-p_vh = f"{gpu_dir}/vgpu/vgpu.h"
-open(p_vh, "w").write(open(p_vh).read().replace(
-    "int vgpu_ioctl(int fd, enum vgpu_selector sel, void *arg);",
-    "int vgpu_ioctl(int fd, enum vgpu_selector sel, void *arg);\n"
-    "int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);"))
-p_vc = f"{gpu_dir}/vgpu/vgpu.c"
-open(p_vc, "w").write(open(p_vc).read().replace(
-    "void *vgpu_mmap(int fd, uint64_t token, size_t size)",
-    "int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size)\n{\n"
-    "    void *conn = lookup(fd);\n"
-    "    if (!conn) return -EBADF;\n"
-    "    return backend()->ioctl(conn, (enum vgpu_selector)sel, arg, size);\n"
-    "}\n\n"
-    "void *vgpu_mmap(int fd, uint64_t token, size_t size)"))
-open(p_vc, "w").write(open(p_vc).read().replace("&vgpu_backend_mock", "&vgpu_backend_iokit"))
-
-
-# Replace driver/isa/*.c with a single clean stub file
-for f in os.listdir(f"{gpu_dir}/driver/isa"):
-    if f.endswith(".c"):
-        os.remove(f"{gpu_dir}/driver/isa/{f}")
-open(f"{gpu_dir}/driver/isa/vmg_isa_stub.c", "w").write("""
-#include "vmg_isa.h"
-#include "vmg_isa_api.h"
-#include <string.h>
-const char *const vmg_isa_feature_name[VMG_ISA_FEATURE_COUNT] = { 0 };
-void vmg_isa_options_from_env(vmg_isa_options *o) { memset(o, 0, sizeof(*o)); }
-void vmg_isa_options_key(const vmg_isa_options *o, char *buf, size_t size) { (void)o; if (size) buf[0] = 0; }
-void vmg_isa_get_stats(vmg_isa_stats *out) { memset(out, 0, sizeof(*out)); }
-struct vmg_isa_program *vmg_isa_compile(const vmg_air_input *in, const vmg_isa_options *opt, uint64_t gpu_id, uint32_t attached,
-                                        vmg_reflection *refl, struct util_dynarray *pool, char **error) {
-    (void)in; (void)opt; (void)gpu_id; (void)attached; (void)refl; (void)pool; (void)error; return NULL;
-}
-void vmg_isa_program_free(struct vmg_isa_program *p) { (void)p; }
-struct nir_shader *vmg_isa_shell(struct vmg_isa_program *p, const struct nir_shader_compiler_options *options, const vmg_reflection *refl) {
-    (void)p; (void)options; (void)refl; return NULL;
-}
-void vmg_isa_install_hooks(void) {}
-const char *vmg_isa_program_name(const struct vmg_isa_program *p) { (void)p; return ""; }
-int vmg_isa_program_stage(const struct vmg_isa_program *p) { (void)p; return 0; }
-uint64_t vmg_isa_program_features(const struct vmg_isa_program *p) { (void)p; return 0; }
-const void *vmg_isa_program_binary(const struct vmg_isa_program *p, size_t *size) { (void)p; if (size) *size = 0; return NULL; }
-const struct pan_shader_info *vmg_isa_program_info(const struct vmg_isa_program *p) { (void)p; return NULL; }
-void *vmg_isa_program_serialize(const struct vmg_isa_program *p, size_t *size) { (void)p; if (size) *size = 0; return NULL; }
-struct vmg_isa_program *vmg_isa_program_deserialize(const void *data, size_t size) { (void)data; (void)size; return NULL; }
-void vmg_isa_note(bool ok, const char *fn, const char *why, uint64_t us, bool cached) { (void)ok; (void)fn; (void)why; (void)us; (void)cached; }
-void vmg_isa_set_input_hook(vmg_isa_input_hook h) { (void)h; }
-void vmg_isa_program_set_input(struct vmg_isa_program *p, void *input) { (void)p; (void)input; }
-""")
-
-
-# Provide VGPU_SEL_* constants and vgpu_counters declaration for VMCommands.m / VMShmStats.m
-open(f"{gpu_dir}/driver/metal/vgpu_shim.h", "w").write("""
-#pragma once
-#include <stdint.h>
-enum {
-    VGPU_SEL_CREATE_BO = 1,
-    VGPU_SEL_GEM_CLOSE = 2,
-    VGPU_SEL_WAIT_BO = 3,
-    VGPU_SEL_SYNCOBJ_WAIT = 4,
-    VGPU_SEL_IMPORT_IOSURFACE = 5,
-    VGPU_SEL_COUNT = 32
-};
-void vgpu_counters(uint64_t calls[VGPU_SEL_COUNT], uint64_t *jobs);
-""")
 
 print("Prepared mapple_gpu_adreno successfully!")
