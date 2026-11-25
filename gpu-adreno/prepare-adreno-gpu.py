@@ -74,4 +74,21 @@ b = b.replace('  # Direct AIR -> Valhall ISA compiler (driver/isa)\n', '  if fal
 b = b.replace('  if stale "$OBJ/vmg_formats.o"', '  fi\n  if stale "$OBJ/vmg_formats.o"')
 b = b.replace('mapple_gpu_uapi.h', 'sweet_msm.h')
 open(p_sh, "w").write(b)
+
+# Add vgpu_ioctl_raw to vgpu.h and vgpu.c for Adreno msm selectors (0x40..0x73)
+p_vh = f"{gpu_dir}/vgpu/vgpu.h"
+open(p_vh, "w").write(open(p_vh).read().replace(
+    "int vgpu_ioctl(int fd, enum vgpu_selector sel, void *arg);",
+    "int vgpu_ioctl(int fd, enum vgpu_selector sel, void *arg);\n"
+    "int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);"))
+p_vc = f"{gpu_dir}/vgpu/vgpu.c"
+open(p_vc, "w").write(open(p_vc).read().replace(
+    "void *vgpu_mmap(int fd, uint64_t token, size_t size)",
+    "int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size)\n{\n"
+    "    void *conn = lookup(fd);\n"
+    "    if (!conn) return -EBADF;\n"
+    "    return backend()->ioctl(conn, (enum vgpu_selector)sel, arg, size);\n"
+    "}\n\n"
+    "void *vgpu_mmap(int fd, uint64_t token, size_t size)"))
+
 print("Prepared mapple_gpu_adreno successfully!")

@@ -15,8 +15,6 @@
 #include "../../uapi/sweet_msm.h"
 #include "../../vgpu/vgpu.h"
 
-#define DRM_IOCTL_NR(req) ((unsigned)((req) & 0xffu))
-#define DRM_COMMAND_BASE  0x40u
 
 static int ret_errno(int r) { if (r < 0) { errno = -r; return -1; } return r; }
 
@@ -71,7 +69,7 @@ int drmIoctl(int fd, unsigned long request, void *arg)
     if (nr >= DRM_COMMAND_BASE) {
         unsigned msm_cmd = nr - DRM_COMMAND_BASE;
         uint32_t sel = SWEET_MSM_BASE + msm_cmd;
-        int r = vgpu_ioctl(fd, (enum vgpu_selector)sel, arg, _IOC_SIZE(request));
+        int r = vgpu_ioctl_raw(fd, sel, arg, (size_t)((request >> 16) & 0x3fffu));
         if (!r && msm_cmd == DRM_MSM_GEM_SUBMIT && fd >= 0 && fd < 1024) {
             g_last_submit_fence[fd] = ((struct drm_msm_gem_submit *)arg)->fence;
         }
@@ -219,7 +217,7 @@ int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)
     pthread_mutex_unlock(&g_bo_lock);
 
     struct sweet_gpu_import_iosurface im = { .surface_id = sf.surface, .plane = sf.plane };
-    int r = vgpu_ioctl(fd, (enum vgpu_selector)SWEET_GPU_SEL_IMPORT_IOSURFACE, &im, sizeof(im));
+    int r = vgpu_ioctl_raw(fd, SWEET_GPU_SEL_IMPORT_IOSURFACE, &im, sizeof(im));
     if (r) { errno = -r; return r; }
     pthread_mutex_lock(&g_bo_lock);
     if (g_bo_count < 2048) {
@@ -274,7 +272,7 @@ int drmSyncobjWait(int fd, uint32_t *handles, unsigned num_handles, int64_t time
                 .fence = seq,
                 .timeout = { .tv_sec = timeout_nsec / 1000000000LL, .tv_nsec = timeout_nsec % 1000000000LL },
             };
-            int r = vgpu_ioctl(fd, (enum vgpu_selector)(SWEET_MSM_BASE + DRM_MSM_WAIT_FENCE), &w, sizeof(w));
+            int r = vgpu_ioctl_raw(fd, SWEET_MSM_BASE + DRM_MSM_WAIT_FENCE, &w, sizeof(w));
             if (r) { errno = -r; return r; }
         }
         if (first_signaled) *first_signaled = i;
