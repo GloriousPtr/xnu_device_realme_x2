@@ -64,7 +64,7 @@ new_targets = '''  local targets="
     src/freedreno/drm/libfreedreno_drm.a
     src/freedreno/ir3/libfreedreno_ir3.a
     src/freedreno/perfcntrs/libfreedreno_perfcntrs.a
-    src/gallium/winsys/freedreno/drm/libfreedrenodrm.a
+    src/gallium/winsys/freedreno/drm/libfreedrenowinsys.a
     src/gallium/drivers/freedreno/libfreedreno.a
   "'''
 assert old_targets in b, "targets block not found in ios/build.sh"
