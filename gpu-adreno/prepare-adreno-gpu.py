@@ -77,8 +77,8 @@ b = b.replace(old_targets, new_targets, 1)
 b = b.replace('"$GPU/mesa/out/macos/cflags.txt"', '"$OUT/cflags.txt"')
 b = b.replace('mapple_gpu_uapi.h', 'sweet_msm.h')
 b = b.replace('"$GPU/vgpu/vgpu_mock.c" ', '')
-b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  sed -i "" "s/-Wpadded/-Wno-padded/g" "$GPU/mesa/src/src/panfrost/compiler/pan_compiler.h" 2>/dev/null || true\n  local ih=("$GPU"/driver/isa/*.h)')
-b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  sed -i "" "s/-Wpadded/-Wno-padded/g" "$GPU/mesa/src/src/panfrost/compiler/pan_compiler.h" 2>/dev/null || true\n  local ih=("$GPU"/driver/isa/*.h)')
+b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  local ih=("$GPU"/driver/isa/*.h)')
+b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  local ih=("$GPU"/driver/isa/*.h)')
 open(p_sh, "w").write(b)
 
 # Add vgpu_ioctl_raw to vgpu.h and vgpu.c for Adreno msm selectors (0x40..0x73)
@@ -97,5 +97,39 @@ open(p_vc, "w").write(open(p_vc).read().replace(
     "}\n\n"
     "void *vgpu_mmap(int fd, uint64_t token, size_t size)"))
 open(p_vc, "w").write(open(p_vc).read().replace("&vgpu_backend_mock", "&vgpu_backend_iokit"))
+
+
+# Replace driver/isa/*.c with a single clean stub file
+for f in os.listdir(f"{gpu_dir}/driver/isa"):
+    if f.endswith(".c"):
+        os.remove(f"{gpu_dir}/driver/isa/{f}")
+open(f"{gpu_dir}/driver/isa/vmg_isa_stub.c", "w").write("""
+#include "vmg_isa.h"
+#include "vmg_isa_api.h"
+#include <string.h>
+const char *const vmg_isa_feature_name[VMG_ISA_FEATURE_COUNT] = { 0 };
+void vmg_isa_options_from_env(vmg_isa_options *o) { memset(o, 0, sizeof(*o)); }
+void vmg_isa_options_key(const vmg_isa_options *o, char *buf, size_t size) { (void)o; if (size) buf[0] = 0; }
+void vmg_isa_get_stats(vmg_isa_stats *out) { memset(out, 0, sizeof(*out)); }
+struct vmg_isa_program *vmg_isa_compile(const vmg_air_input *in, const vmg_isa_options *opt, uint64_t gpu_id, uint32_t attached,
+                                        vmg_reflection *refl, struct util_dynarray *pool, char **error) {
+    (void)in; (void)opt; (void)gpu_id; (void)attached; (void)refl; (void)pool; (void)error; return NULL;
+}
+void vmg_isa_program_free(struct vmg_isa_program *p) { (void)p; }
+struct nir_shader *vmg_isa_shell(struct vmg_isa_program *p, const struct nir_shader_compiler_options *options, const vmg_reflection *refl) {
+    (void)p; (void)options; (void)refl; return NULL;
+}
+void vmg_isa_install_hooks(void) {}
+const char *vmg_isa_program_name(const struct vmg_isa_program *p) { (void)p; return ""; }
+int vmg_isa_program_stage(const struct vmg_isa_program *p) { (void)p; return 0; }
+uint64_t vmg_isa_program_features(const struct vmg_isa_program *p) { (void)p; return 0; }
+const void *vmg_isa_program_binary(const struct vmg_isa_program *p, size_t *size) { (void)p; if (size) *size = 0; return NULL; }
+const struct pan_shader_info *vmg_isa_program_info(const struct vmg_isa_program *p) { (void)p; return NULL; }
+void *vmg_isa_program_serialize(const struct vmg_isa_program *p, size_t *size) { (void)p; if (size) *size = 0; return NULL; }
+struct vmg_isa_program *vmg_isa_program_deserialize(const void *data, size_t size) { (void)data; (void)size; return NULL; }
+void vmg_isa_note(bool ok, const char *fn, const char *why, uint64_t us, bool cached) { (void)ok; (void)fn; (void)why; (void)us; (void)cached; }
+void vmg_isa_set_input_hook(vmg_isa_input_hook h) { (void)h; }
+void vmg_isa_program_set_input(struct vmg_isa_program *p, void *input) { (void)p; (void)input; }
+""")
 
 print("Prepared mapple_gpu_adreno successfully!")
