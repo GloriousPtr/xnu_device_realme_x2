@@ -41,7 +41,7 @@ jobs:
           -I$I/include -I$I/src -I$B/src
           -I$I/src/gallium/include -I$I/src/gallium/auxiliary -I$B/src/gallium/auxiliary
           -I$I/src/gallium/drivers -I$I/src/gallium/winsys
-          -I$I/src/compiler -I$B/src/compiler -I$I/src/compiler/nir -I$I/src/compiler/nir
+          -I$I/src/compiler -I$B/src/compiler -I$I/src/compiler/nir -I$B/src/compiler/nir
           -I$I/src/freedreno -I$B/src/freedreno -I$I/src/freedreno/common -I$B/src/freedreno/registers
           EOC
           bash gpu/ios/build.sh driver
