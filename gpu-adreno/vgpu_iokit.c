@@ -1,10 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "vgpu.h"
-#include "../uapi/sweet_msm.h"
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include "../uapi/sweet_msm.h"
 #include "iokit_compat.h"
+
+enum vgpu_selector { VGPU_SEL_DUMMY = 0 };
+struct vgpu_backend {
+    const char *name;
+    int (*open)(void **conn);
+    void (*close)(void *conn);
+    int (*ioctl)(void *conn, enum vgpu_selector sel, void *arg, size_t size);
+    void *(*mmap)(void *conn, uint64_t token, size_t size);
+    int (*munmap)(void *conn, void *addr, size_t size);
+};
 
 typedef struct {
     io_connect_t conn;

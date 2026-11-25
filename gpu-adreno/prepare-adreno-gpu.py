@@ -8,12 +8,7 @@ for f in os.listdir(f"{gpu_dir}/mesa/patches"):
     os.remove(f"{gpu_dir}/mesa/patches/{f}")
 shutil.copy(f"{overlay}/0001-freedreno-xnu.patch", f"{gpu_dir}/mesa/patches/0001-freedreno-xnu.patch")
 shutil.copy(f"{overlay}/sweet_msm.h", f"{gpu_dir}/uapi/sweet_msm.h")
-p_iok = f"{gpu_dir}/vgpu/vgpu_iokit.c"
-s_iok = open(p_iok).read()
-s_iok = s_iok.replace("MappleGPUAccelerator", "SweetGPU")
-s_iok = s_iok.replace("c->trap = info.minor >= 1;", "c->trap = false;")
-s_iok = s_iok.replace("VGPU_SEL_INFO", "0x70")
-open(p_iok, "w").write(s_iok)
+shutil.copy(f"{overlay}/vgpu_iokit.c", f"{gpu_dir}/vgpu/vgpu_iokit.c")
 shutil.copy(f"{overlay}/xf86drm_xnu.c", f"{gpu_dir}/libdrm-xnu/src/xf86drm_xnu.c")
 
 # Update vmg_screen.c: use fd_drm_screen_create + disable Valhall ISA path
