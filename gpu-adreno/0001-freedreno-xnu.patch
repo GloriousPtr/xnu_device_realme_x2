@@ -60,6 +60,19 @@ index 6eda810..4204683 100644
  }
  
  /* For internal use only, does not check FD_BO_NOMAP: */
+diff --git a/src/freedreno/meson.build b/src/freedreno/meson.build
+index e8f01b8..1e1615b 100644
+--- a/src/freedreno/meson.build
++++ b/src/freedreno/meson.build
+@@ -22,7 +22,7 @@ subdir('ir2')
+ subdir('ir3')
+ subdir('fdl')
+ 
+-if system_has_kms_drm
++if system_has_kms_drm or (host_machine.system() == 'darwin' and with_gallium_freedreno)
+   subdir('drm')
+ endif
+ 
 diff --git a/src/util/meson.build b/src/util/meson.build
 index b11f0c4..ed9adb8 100644
 --- a/src/util/meson.build
