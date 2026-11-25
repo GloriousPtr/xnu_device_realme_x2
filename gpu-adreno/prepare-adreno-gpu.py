@@ -1,6 +1,6 @@
 import os, re, shutil, sys
 
-gpu_dir = sys.argv
+gpu_dir = sys.argv[1]
 overlay = os.path.dirname(os.path.abspath(__file__))
 
 # Replace patches, uapi, vgpu_iokit.c, xf86drm_xnu.c
@@ -176,7 +176,7 @@ open(f"{gpu_dir}/driver/isa/vmg_isa_stub.c", "w").write("""
 #include <string.h>
 const char *const vmg_isa_feature_name[VMG_ISA_FEATURE_COUNT] = { 0 };
 void vmg_isa_options_from_env(vmg_isa_options *o) { memset(o, 0, sizeof(*o)); }
-void vmg_isa_options_key(const vmg_isa_options *o, char *buf, size_t size) { (void)o; if (size) buf = 0; }
+void vmg_isa_options_key(const vmg_isa_options *o, char *buf, size_t size) { (void)o; if (size) buf[0] = 0; }
 void vmg_isa_get_stats(vmg_isa_stats *out) { memset(out, 0, sizeof(*out)); }
 void vmg_isa_counters(uint64_t *a, uint64_t *b, uint64_t *c, uint64_t *d) { (void)a; (void)b; (void)c; (void)d; }
 struct vmg_isa_program *vmg_isa_compile(const vmg_air_input *in, const vmg_isa_options *opt, uint64_t gpu_id, uint32_t attached,
