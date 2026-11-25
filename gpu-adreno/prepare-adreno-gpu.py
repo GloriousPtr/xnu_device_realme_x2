@@ -77,6 +77,7 @@ b = b.replace(old_targets, new_targets, 1)
 b = b.replace('"$GPU/mesa/out/macos/cflags.txt"', '"$OUT/cflags.txt"')
 b = b.replace('mapple_gpu_uapi.h', 'sweet_msm.h')
 b = b.replace('"$GPU/vgpu/vgpu_mock.c" ', '')
+b = b.replace('-I"$GPU/driver/metal" -I"$GPU/driver"', '-include "$GPU/driver/metal/vgpu_shim.h" -I"$GPU/driver/metal" -I"$GPU/driver"')
 b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  local ih=("$GPU"/driver/isa/*.h)')
 b = b.replace('  local ih=("$GPU"/driver/isa/*.h)', '  local ih=("$GPU"/driver/isa/*.h)')
 open(p_sh, "w").write(b)
@@ -130,6 +131,22 @@ struct vmg_isa_program *vmg_isa_program_deserialize(const void *data, size_t siz
 void vmg_isa_note(bool ok, const char *fn, const char *why, uint64_t us, bool cached) { (void)ok; (void)fn; (void)why; (void)us; (void)cached; }
 void vmg_isa_set_input_hook(vmg_isa_input_hook h) { (void)h; }
 void vmg_isa_program_set_input(struct vmg_isa_program *p, void *input) { (void)p; (void)input; }
+""")
+
+
+# Provide VGPU_SEL_* constants and vgpu_counters declaration for VMCommands.m / VMShmStats.m
+open(f"{gpu_dir}/driver/metal/vgpu_shim.h", "w").write("""
+#pragma once
+#include <stdint.h>
+enum {
+    VGPU_SEL_CREATE_BO = 1,
+    VGPU_SEL_GEM_CLOSE = 2,
+    VGPU_SEL_WAIT_BO = 3,
+    VGPU_SEL_SYNCOBJ_WAIT = 4,
+    VGPU_SEL_IMPORT_IOSURFACE = 5,
+    VGPU_SEL_COUNT = 32
+};
+void vgpu_counters(uint64_t calls[VGPU_SEL_COUNT], uint64_t *jobs);
 """)
 
 print("Prepared mapple_gpu_adreno successfully!")
