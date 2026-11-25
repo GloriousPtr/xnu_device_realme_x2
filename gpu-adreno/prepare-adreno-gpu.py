@@ -73,6 +73,7 @@ b = b.replace('"$GPU/mesa/out/macos/cflags.txt"', '"$OUT/cflags.txt"')
 b = b.replace('  # Direct AIR -> Valhall ISA compiler (driver/isa)\n', '  if false; then\n')
 b = b.replace('  if stale "$OBJ/vmg_formats.o"', '  fi\n  if stale "$OBJ/vmg_formats.o"')
 b = b.replace('mapple_gpu_uapi.h', 'sweet_msm.h')
+b = b.replace('"$GPU/vgpu/vgpu_mock.c" ', '')
 open(p_sh, "w").write(b)
 
 # Add vgpu_ioctl_raw to vgpu.h and vgpu.c for Adreno msm selectors (0x40..0x73)
