@@ -16,6 +16,8 @@ p_scr = f"{gpu_dir}/driver/vmg_screen.c"
 s = open(p_scr).read()
 decls = (
     '#include "freedreno/drm/freedreno_drm_public.h"\n'
+    'struct renderonly;\n'
+    'struct pipe_screen *fd_drm_screen_create(int fd, struct renderonly *ro, const struct pipe_screen_config *config);\n'
     'int vgpu_open(void);\n'
     'int vgpu_close(int fd);\n'
     'const char *vgpu_backend_name(void);\n'
