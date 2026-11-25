@@ -91,4 +91,10 @@ open(p_vc, "w").write(open(p_vc).read().replace(
     "}\n\n"
     "void *vgpu_mmap(int fd, uint64_t token, size_t size)"))
 
+
+open(f"{gpu_dir}/vgpu/vgpu_mock.c", "w").write(
+    '#include "vgpu.h"\n'
+    'const struct vgpu_backend vgpu_backend_mock = { "mock", NULL, NULL, NULL, NULL, NULL };\n'
+)
+
 print("Prepared mapple_gpu_adreno successfully!")
