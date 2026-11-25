@@ -17,7 +17,8 @@ jobs:
 
       - name: Setup Xcode 15 and Homebrew tools
         run: |
-          brew install pkgconf
+          brew install pkgconf bison
+          echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
           XC=$(ls -d /Applications/Xcode_15*.app 2>/dev/null | sort -V | tail -1)
           [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
           echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
