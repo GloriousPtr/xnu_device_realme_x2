@@ -77,6 +77,8 @@ b = b.replace(old_targets, new_targets, 1)
 b = b.replace('"$GPU/mesa/out/macos/cflags.txt"', '"$OUT/cflags.txt"')
 b = b.replace('mapple_gpu_uapi.h', 'sweet_msm.h')
 b = b.replace('"$GPU/vgpu/vgpu_mock.c" ', '')
+b = b.replace('-I"$GPU/driver/isa" -c "$f"', '-Wno-padded -I"$GPU/driver/isa" -c "$f"')
+b = b.replace('-I"$GPU/driver/isa" -c "$f"', '-Wno-padded -I"$GPU/driver/isa" -c "$f"')
 open(p_sh, "w").write(b)
 
 # Add vgpu_ioctl_raw to vgpu.h and vgpu.c for Adreno msm selectors (0x40..0x73)
