@@ -225,6 +225,9 @@ new_targets = '''  local targets="
     src/freedreno/drm/libfreedreno_drm.a
     src/freedreno/ir3/libfreedreno_ir3.a
     src/freedreno/perfcntrs/libfreedreno_perfcntrs.a
+    src/freedreno/fdl/libfreedreno_layout.a
+    src/freedreno/isa/libir3encode.a
+    src/freedreno/ir2/libfreedreno_ir2.a
     src/gallium/winsys/freedreno/drm/libfreedrenowinsys.a
     src/gallium/drivers/freedreno/libfreedreno.a
   "'''

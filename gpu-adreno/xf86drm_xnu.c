@@ -13,10 +13,12 @@
 #include "xf86drm.h"
 #include "libdrm/drm.h"
 #include "../../uapi/sweet_msm.h"
+int vgpu_open(void);
 int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);
 void *vgpu_mmap(int fd, uint64_t token, size_t size);
 int vgpu_munmap(int fd, void *addr, size_t size);
 
+int vgpu_open(void);
 int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);
 void *vgpu_mmap(int fd, uint64_t token, size_t size);
 int vgpu_munmap(int fd, void *addr, size_t size);
@@ -304,3 +306,28 @@ int drmSyncobjImportSyncFile(int fd, uint32_t handle, int sync_file_fd) { (void)
 int drmSyncobjFDToHandle(int fd, int obj_fd, uint32_t *handle) { (void)fd; (void)obj_fd; (void)handle; errno = ENOSYS; return -ENOSYS; }
 int drmSyncobjTimelineWait(int fd, uint32_t *handles, uint64_t *points, unsigned num_handles, int64_t timeout_nsec, unsigned flags, uint32_t *first_signaled) { return drmSyncobjWait(fd, handles, num_handles, timeout_nsec, flags, first_signaled); }
 int drmSyncobjTransfer(int fd, uint32_t dst_handle, uint64_t dst_point, uint32_t src_handle, uint64_t src_point, uint32_t flags) { (void)dst_point; (void)src_point; (void)flags; return drmSyncobjCopyXNU(fd, dst_handle, src_handle); }
+
+int drmCommandWrite(int fd, unsigned long drmCommandIndex, void *data, unsigned long size)
+{
+    return ret_errno(vgpu_ioctl_raw(fd, (uint32_t)(SWEET_MSM_BASE + drmCommandIndex), data, (size_t)size));
+}
+
+int drmCommandWriteRead(int fd, unsigned long drmCommandIndex, void *data, unsigned long size)
+{
+    return ret_errno(vgpu_ioctl_raw(fd, (uint32_t)(SWEET_MSM_BASE + drmCommandIndex), data, (size_t)size));
+}
+
+int drmGetCap(int fd, uint64_t capability, uint64_t *value)
+{
+    (void)fd;
+    if (!value) { errno = EINVAL; return -1; }
+    *value = (capability == 0x13 || capability == 0x14) ? 1 : 0;
+    return 0;
+}
+
+int drmOpenWithType(const char *name, const char *busid, int type)
+{
+    (void)name; (void)busid; (void)type;
+    int fd = vgpu_open();
+    return ret_errno(fd);
+}
