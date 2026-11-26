@@ -37,7 +37,7 @@ extern const struct vgpu_backend vgpu_backend_iokit;
 #define MAX_FDS 1024
 static void *g_conn[MAX_FDS];
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static _Atomic uint64_t g_cnt[32], g_jobs;
+static _Atomic uint64_t g_cnt[24], g_jobs;
 
 const char *vgpu_backend_name(void) { return vgpu_backend_iokit.name; }
 
@@ -84,7 +84,7 @@ int vgpu_close(int fd)
 
 void vgpu_counters(uint64_t calls[32], uint64_t *jobs)
 {
-    for (unsigned i = 0; i < 32; i++) calls[i] = atomic_load_explicit(&g_cnt[i], memory_order_relaxed);
+    for (unsigned i = 0; i < 24; i++) calls[i] = atomic_load_explicit(&g_cnt[i], memory_order_relaxed);
     *jobs = atomic_load_explicit(&g_jobs, memory_order_relaxed);
 }
 
@@ -233,7 +233,7 @@ b = b.replace(old_targets, new_targets, 1)
 b = b.replace('"$GPU/mesa/out/macos/cflags.txt"', '"$OUT/cflags.txt"')
 b = b.replace('mapple_gpu_uapi.h', 'sweet_msm.h')
 b = b.replace('"$GPU/vgpu/vgpu_mock.c" ', '')
-b = b.replace('-I"$GPU/driver/metal" -I"$GPU/driver"', '-include "$GPU/driver/metal/vgpu_shim.h" -I"$GPU/driver/metal" -I"$GPU/driver"')
+b = b.replace('-I"$GPU/driver/metal" -I"$GPU/driver"', '-I"$GPU/driver/metal" -I"$GPU/driver"')
 open(p_sh, "w").write(b)
 
 print("Prepared mapple_gpu_adreno successfully!")
