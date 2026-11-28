@@ -1,0 +1,68 @@
+name: adreno-bundle
+
+# MappleMTLDriver.bundle (iOS 16 arm64) on Mesa's freedreno, for the realme X2 image (ios/mkuserdata.sh layout:
+# MappleMTLDriver.bundle + tests/). Same Mesa tree and patches as adreno-host.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "gpu-adreno-host/**"
+      - ".github/workflows/adreno-bundle.yml"
+
+env:
+  MESA_TAG: mesa-26.2.6
+  MALI_REPO: https://github.com/open-mapple/mapple_gpu_mali
+
+jobs:
+  bundle:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          brew install pkgconf bison flex
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q meson ninja mako pyyaml packaging
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/flex/bin" >> "$GITHUB_PATH"
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Fetch the Mali tree and Mesa
+        run: |
+          git clone -q --depth 1 "$MALI_REPO" "$RUNNER_TEMP/mali"
+          git clone -q --depth 1 --branch "$MESA_TAG" https://gitlab.freedesktop.org/mesa/mesa.git "$RUNNER_TEMP/mesa"
+          echo "MALI=$RUNNER_TEMP/mali" >> "$GITHUB_ENV"
+          echo "SRC=$RUNNER_TEMP/mesa" >> "$GITHUB_ENV"
+          echo "OUT=$RUNNER_TEMP/bundle-out" >> "$GITHUB_ENV"
+
+      - name: Apply Mesa patches
+        run: |
+          for p in "$MALI/mesa/patches/0001-meson-darwin-libdrm.patch" \
+                   "$GITHUB_WORKSPACE/gpu-adreno-host/patches/0001-freedreno-on-darwin.patch" \
+                   "$GITHUB_WORKSPACE/gpu-adreno-host/patches/0002-freedreno-xnu-bo-map.patch"; do
+            echo "== $p"
+            git -C "$SRC" apply --check "$p"
+            git -C "$SRC" apply "$p"
+          done
+
+      - name: Build the bundle
+        run: bash gpu-adreno-host/build-bundle.sh
+
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p collect
+          cp -R "$OUT/dist/." collect/ 2>/dev/null || true
+          cp "$OUT"/*.log collect/ 2>/dev/null || true
+          cp "$OUT/build-ios/meson-logs/meson-log.txt" collect/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: MappleMTLDriver-adreno-x2
+          path: collect/
