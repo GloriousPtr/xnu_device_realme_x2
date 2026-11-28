@@ -1,0 +1,618 @@
+diff --git a/iokit/Kernel/arm/SweetGPUClient.cpp b/iokit/Kernel/arm/SweetGPUClient.cpp
+index 199105b..780b389 100644
+--- a/iokit/Kernel/arm/SweetGPUClient.cpp
++++ b/iokit/Kernel/arm/SweetGPUClient.cpp
+@@ -2,11 +2,6 @@
+  * The user interface of the SM7150 Adreno 618 service (bsd/dev/sweet_gsvc.c): an IOKit service
+  * and user client that speak the msm DRM commands, so Mesa's freedreno can sit on a libdrm
+  * stand-in. Opt-in: nothing is published without the boot-arg sweetgpuabi=1.
+- *
+- * Selectors are 0x40 + DRM_MSM_x (sweet_msm.h), plus 0x70 (ABI info) and 0x72 (close a BO). A BO
+- * is kernel memory from sweet_gsvc_bo_new at a fixed GPU address; the client maps it with
+- * IOConnectMapMemory64 (memory type = handle) and reads the address with GEM_INFO. Addresses
+- * never move, so a submit carries no relocations. One ring, one address space, polled fences.
+  */
+ #include <pexpert/arm64/board_config.h>
+ 
+@@ -20,41 +15,62 @@
+ #include <sys/errno.h>
+ #include <mach/mach_time.h>
+ #include "sweet_msm.h"
++#include "SweetSurface.h"
+ 
+ extern "C" {
+-#define SWEET_GSVC_READY 1u
+-#define SWEET_GSVC_DEAD  2u
+-struct sweet_gsvc_ib {
+-	uint32_t handle, offset, size_dw;
+-};
+-struct sweet_gsvc_info {
+-	uint32_t chip_id, gmem_size, gmem_base;
+-	uint32_t cur_khz, max_khz, last_retired, flags;
+-	uint64_t fence_pa, window_base, window_size;
+-};
+-/* bsd/dev/sweet_gsvc.c */
+-int sweet_gsvc_bo_new(uint32_t size, uint32_t flags, uint32_t *handle, uint64_t *gpu_va, volatile uint32_t **cpu);
+-int sweet_gsvc_bo_free(uint32_t handle);
+-int sweet_gsvc_bo_sync(uint32_t handle);
+-int sweet_gsvc_submit(const struct sweet_gsvc_ib *ibs, unsigned n, uint32_t *seq);
+-int sweet_gsvc_wait(uint32_t seq, uint32_t timeout_ms);
+-void sweet_gsvc_info(struct sweet_gsvc_info *info);
++	#define SWEET_GSVC_READY 1u
++	#define SWEET_GSVC_DEAD  2u
++	struct sweet_gsvc_ib {
++		uint32_t handle, offset, size_dw;
++	};
++	struct sweet_gsvc_info {
++		uint32_t chip_id, gmem_size, gmem_base;
++		uint32_t cur_khz, max_khz, last_retired, flags;
++		uint64_t fence_pa, window_base, window_size;
++	};
++	/* bsd/dev/sweet_gsvc.c */
++	int sweet_gsvc_bo_new(uint32_t size, uint32_t flags, uint32_t *handle, uint64_t *gpu_va, volatile uint32_t **cpu);
++	int sweet_gsvc_bo_import_pages(const uint64_t *pa, uint32_t npages, uint32_t *handle, uint64_t *gpu_va);
++	int sweet_gsvc_bo_free(uint32_t handle);
++	int sweet_gsvc_bo_sync(uint32_t handle);
++	int sweet_gsvc_submit(const struct sweet_gsvc_ib *ibs, unsigned n, uint32_t *seq);
++	int sweet_gsvc_wait(uint32_t seq, uint32_t timeout_ms);
++	void sweet_gsvc_info(struct sweet_gsvc_info *info);
+ }
+ 
+-#define SG_MAX_BO       2048u   /* the table of sweet_gsvc.c with sweetgpuvm=1 (64 without it) */
+-#define SG_MAX_IBS      16u
+-#define SG_MAX_BOS      1024u   /* entries of a submit's BO table */
+-#define SG_GPU_ID       618u
+-#define SG_WAIT_MAX_MS  5000u
++#define SG_MAX_BO        2048u
++#define SG_MAX_IBS       16u
++#define SG_MAX_BOS       1024u
++#define SG_GPU_ID        618u
++#define SG_WAIT_MAX_MS   5000u
++#define VGPU_CLIENT_TYPE 0x76677075u /* 'vgpu' */
++
++/* Metal of iOS 16 discovers GPUs with IOServiceMatching("IOAcceleratorES"). */
++class IOAcceleratorES : public IOService {
++	OSDeclareDefaultStructors(IOAcceleratorES);
++};
++OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
+ 
+-class SweetGPU : public IOService {
++class SweetGPUProbeClient : public IOUserClient {
++	OSDeclareDefaultStructors(SweetGPUProbeClient);
++public:
++	IOReturn externalMethod(uint32_t, IOExternalMethodArguments *,
++							IOExternalMethodDispatch *, OSObject *, void *) APPLE_KEXT_OVERRIDE {
++								return kIOReturnUnsupported;
++							}
++};
++OSDefineMetaClassAndStructors(SweetGPUProbeClient, IOUserClient);
++
++class SweetGPU : public IOAcceleratorES {
+ 	OSDeclareDefaultStructors(SweetGPU);
+ 
+ public:
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
++						   IOUserClient **handler) APPLE_KEXT_OVERRIDE;
+ };
+ 
+-OSDefineMetaClassAndStructors(SweetGPU, IOService);
++OSDefineMetaClassAndStructors(SweetGPU, IOAcceleratorES);
+ 
+ bool
+ SweetGPU::start(IOService *provider)
+@@ -63,12 +79,14 @@ SweetGPU::start(IOService *provider)
+ 	if (!PE_parse_boot_argn("sweetgpuabi", &on, sizeof(on)) || on != 1) {
+ 		return false;
+ 	}
+-	if (!IOService::start(provider)) {
++	if (!IOAcceleratorES::start(provider)) {
+ 		return false;
+ 	}
+ 	setProperty(kIOUserClientClassKey, "SweetGPUClient");
++	setProperty("MetalPluginName", "MappleMTLDriver");
++	setProperty("MetalPluginClassName", "VMDevice");
+ 	registerService();
+-	IOLog("SWEET GPU: user interface published (sweetgpuabi=1, abi %u)\n", SWEET_GPU_ABI);
++	IOLog("SWEET GPU: accelerator published (sweetgpuabi=1, abi %u, MappleMTLDriver)\n", SWEET_GPU_ABI);
+ 	return true;
+ }
+ 
+@@ -81,20 +99,21 @@ public:
+ 	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
+ 	IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
+ 	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+-	    IOExternalMethodDispatch *dispatch, OSObject *target,
+-	    void *reference) APPLE_KEXT_OVERRIDE;
++							IOExternalMethodDispatch *dispatch, OSObject *target,
++							void *reference) APPLE_KEXT_OVERRIDE;
+ 
+ private:
+ 	struct Bo {
+-		bool used, retired;
++		bool used, retired, imported;
+ 		volatile uint32_t *cpu;
++		IOMemoryDescriptor *mem;
+ 		uint32_t size, flags;
+ 		uint64_t gva;
+ 	};
+ 
+ 	task_t fTask;
+ 	IOLock *fLock;
+-	Bo *fBo;                        /* SG_MAX_BO + 1 entries: too big to sit in the object */
++	Bo *fBo;
+ 	uint32_t fQueues;
+ 	uint32_t fLastFence;
+ 	bool fClosed;
+@@ -106,6 +125,7 @@ private:
+ 	IOReturn gemInfo(IOExternalMethodArguments *args);
+ 	IOReturn gemPrep(IOExternalMethodArguments *args);
+ 	IOReturn gemClose(IOExternalMethodArguments *args);
++	IOReturn importIOSurface(IOExternalMethodArguments *args);
+ 	IOReturn submit(IOExternalMethodArguments *args);
+ 	IOReturn waitFence(IOExternalMethodArguments *args);
+ 	IOReturn queueNew(IOExternalMethodArguments *args);
+@@ -113,17 +133,44 @@ private:
+ 
+ OSDefineMetaClassAndStructors(SweetGPUClient, IOUserClient);
+ 
++IOReturn
++SweetGPU::newUserClient(task_t owningTask, void *securityID, UInt32 type, IOUserClient **handler)
++{
++	if (type != VGPU_CLIENT_TYPE) {
++		SweetGPUProbeClient *p = new SweetGPUProbeClient;
++		if (p == NULL) {
++			return kIOReturnNoMemory;
++		}
++		if (!p->initWithTask(owningTask, securityID, type) || !p->attach(this)) {
++			p->release();
++			return kIOReturnError;
++		}
++		*handler = p;
++		return kIOReturnSuccess;
++	}
++	SweetGPUClient *c = new SweetGPUClient;
++	if (c == NULL) {
++		return kIOReturnNoMemory;
++	}
++	if (!c->initWithTask(owningTask, securityID, type) || !c->attach(this)) {
++		c->release();
++		return kIOReturnError;
++	}
++	*handler = c;
++	return kIOReturnSuccess;
++}
++
+ static IOReturn
+ sg_ret(int e)
+ {
+ 	switch (e) {
+-	case 0:         return kIOReturnSuccess;
+-	case ENOMEM:    return kIOReturnNoMemory;
+-	case EINVAL:    return kIOReturnBadArgument;
+-	case ENXIO:     return kIOReturnNotReady;
+-	case EBUSY:     return kIOReturnBusy;
+-	case ETIMEDOUT: return kIOReturnTimeout;
+-	default:        return kIOReturnIOError;
++		case 0:         return kIOReturnSuccess;
++		case ENOMEM:    return kIOReturnNoMemory;
++		case EINVAL:    return kIOReturnBadArgument;
++		case ENXIO:     return kIOReturnNotReady;
++		case EBUSY:     return kIOReturnBusy;
++		case ETIMEDOUT: return kIOReturnTimeout;
++		default:        return kIOReturnIOError;
+ 	}
+ }
+ 
+@@ -135,7 +182,6 @@ sg_usable(void)
+ 	return (info.flags & SWEET_GSVC_READY) && !(info.flags & SWEET_GSVC_DEAD);
+ }
+ 
+-/* The structure input of a call, exactly the size the command takes. */
+ template <typename T>
+ static bool
+ sg_in(IOExternalMethodArguments *args, T *out)
+@@ -185,13 +231,16 @@ SweetGPUClient::clientClose(void)
+ 	uint32_t last = fLastFence;
+ 	IOLockUnlock(fLock);
+ 	if (first) {
+-		/* the GPU may still read what is freed here */
+ 		if (last) {
+ 			(void)sweet_gsvc_wait(last, SG_WAIT_MAX_MS);
+ 		}
+ 		for (uint32_t h = 1; h <= SG_MAX_BO; h++) {
+ 			if (fBo[h].used) {
+ 				(void)sweet_gsvc_bo_free(h);
++				if (fBo[h].mem != NULL) {
++					fBo[h].mem->release();
++					fBo[h].mem = NULL;
++				}
+ 				fBo[h].used = false;
+ 			}
+ 		}
+@@ -220,7 +269,6 @@ SweetGPUClient::owns(uint32_t handle)
+ 	return handle >= 1 && handle <= SG_MAX_BO && fBo[handle].used && !fBo[handle].retired;
+ }
+ 
+-/* Reads LEN bytes of the calling task's memory at UADDR. */
+ bool
+ SweetGPUClient::copyIn(uint64_t uaddr, void *dst, size_t len)
+ {
+@@ -246,17 +294,26 @@ SweetGPUClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemory
+ 	IOLockLock(fLock);
+ 	bool ok = owns(type);
+ 	Bo bo = ok ? fBo[type] : Bo();
++	if (ok && bo.imported && bo.mem != NULL) {
++		bo.mem->retain();
++	}
+ 	IOLockUnlock(fLock);
+ 	if (!ok) {
+ 		return kIOReturnBadArgument;
+ 	}
+-	/* cacheable, like the kernel's own alias: CPU_PREP / CPU_FINI do the cache work */
++	*options = 0;
++	if (bo.imported) {
++		if (bo.mem == NULL) {
++			return kIOReturnUnsupported;
++		}
++		*memory = bo.mem;
++		return kIOReturnSuccess;
++	}
+ 	IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange((mach_vm_address_t)bo.cpu,
+-	    round_page(bo.size), kIODirectionInOut, kernel_task);
++																  round_page(bo.size), kIODirectionInOut, kernel_task);
+ 	if (md == NULL) {
+ 		return kIOReturnNoMemory;
+ 	}
+-	*options = 0;
+ 	*memory = md;
+ 	return kIOReturnSuccess;
+ }
+@@ -272,16 +329,15 @@ SweetGPUClient::getParam(IOExternalMethodArguments *args)
+ 	sweet_gsvc_info(&info);
+ 	uint64_t v;
+ 	switch (p.param) {
+-	case MSM_PARAM_GPU_ID:     v = SG_GPU_ID; break;
+-	case MSM_PARAM_GMEM_SIZE:  v = info.gmem_size; break;
+-	case MSM_PARAM_CHIP_ID:    v = info.chip_id; break;
+-	case MSM_PARAM_MAX_FREQ:   v = (uint64_t)info.max_khz * 1000u; break;
+-	case MSM_PARAM_TIMESTAMP:  v = mach_absolute_time(); break;      /* the 19.2 MHz architected counter */
+-	case MSM_PARAM_GMEM_BASE:  v = info.gmem_base; break;
+-	case MSM_PARAM_PRIORITIES: v = 1; break;                         /* one ring */
+-	case MSM_PARAM_PP_PGTABLE: v = 0; break;                         /* one address space */
+-	/* not VA_START / VA_SIZE: userspace then takes the addresses GEM_INFO returns */
+-	default:                   return kIOReturnUnsupported;
++		case MSM_PARAM_GPU_ID:     v = SG_GPU_ID; break;
++		case MSM_PARAM_GMEM_SIZE:  v = info.gmem_size; break;
++		case MSM_PARAM_CHIP_ID:    v = info.chip_id; break;
++		case MSM_PARAM_MAX_FREQ:   v = (uint64_t)info.max_khz * 1000u; break;
++		case MSM_PARAM_TIMESTAMP:  v = mach_absolute_time(); break;
++		case MSM_PARAM_GMEM_BASE:  v = info.gmem_base; break;
++		case MSM_PARAM_PRIORITIES: v = 1; break;
++		case MSM_PARAM_PP_PGTABLE: v = 0; break;
++		default:                   return kIOReturnUnsupported;
+ 	}
+ 	p.value = v;
+ 	return sg_out(args, &p) ? kIOReturnSuccess : kIOReturnBadArgument;
+@@ -305,12 +361,86 @@ SweetGPUClient::gemNew(IOExternalMethodArguments *args)
+ 		return sg_ret(e);
+ 	}
+ 	IOLockLock(fLock);
+-	fBo[h] = (Bo){ true, false, cpu, (uint32_t)n.size, n.flags, gva };
++	fBo[h] = (Bo){ true, false, false, cpu, NULL, (uint32_t)n.size, n.flags, gva };
+ 	IOLockUnlock(fLock);
+ 	n.handle = h;
+ 	return sg_out(args, &n) ? sg_ret(e) : kIOReturnBadArgument;
+ }
+-
++IOReturn
++SweetGPUClient::importIOSurface(IOExternalMethodArguments *args)
++{
++	struct sweet_gpu_import_iosurface im;
++	if (!sg_in(args, &im)) {
++		return kIOReturnBadArgument;
++	}
++	if (!sg_usable()) {
++		return kIOReturnNotReady;
++	}
++	SweetSurface *surf = sweet_surface_copy(im.surface_id);
++	if (surf == NULL || surf->memory == NULL) {
++		if (surf != NULL) surf->release();
++		return kIOReturnNotFound;
++	}
++	uint32_t plane_off = surf->offset, plane_sz = surf->allocSize;
++	uint32_t w = surf->width, h = surf->height, bpr = surf->bytesPerRow;
++	if (surf->planeCount > 0) {
++		if (im.plane >= surf->planeCount) {
++			surf->release();
++			return kIOReturnBadArgument;
++		}
++		plane_off = surf->planes[im.plane].offset;
++		plane_sz  = surf->planes[im.plane].size;
++		w         = surf->planes[im.plane].width;
++		h         = surf->planes[im.plane].height;
++		bpr       = surf->planes[im.plane].bytesPerRow;
++	} else if (im.plane != 0) {
++		surf->release();
++		return kIOReturnBadArgument;
++	}
++	uint32_t page_base = plane_off & ~0xfffu;
++	uint32_t in_page   = plane_off & 0xfffu;
++	uint32_t span      = (in_page + plane_sz + 0xfffu) & ~0xfffu;
++	uint32_t npages    = span / 0x1000u;
++	if (npages == 0 || npages > 16384u) {
++		surf->release();
++		return kIOReturnBadArgument;
++	}
++	uint64_t *pa = (uint64_t *)IOMalloc(npages * sizeof(uint64_t));
++	if (pa == NULL) {
++		surf->release();
++		return kIOReturnNoMemory;
++	}
++	for (uint32_t i = 0; i < npages; i++) {
++		IOByteCount segLen = 0;
++		addr64_t p = surf->memory->getPhysicalSegment((IOByteCount)page_base + (IOByteCount)i * 0x1000u, &segLen, 0);
++		if (p == 0 || segLen < 0x1000u) {
++			IOFree(pa, npages * sizeof(uint64_t));
++			surf->release();
++			return kIOReturnVMError;
++		}
++		pa[i] = (uint64_t)p;
++	}
++	uint32_t bo_h = 0;
++	uint64_t gva = 0;
++	int e = sweet_gsvc_bo_import_pages(pa, npages, &bo_h, &gva);
++	IOFree(pa, npages * sizeof(uint64_t));
++	if (e != 0 || bo_h == 0) {
++		surf->release();
++		return sg_ret(e ? e : EIO);
++	}
++	surf->memory->retain();
++	IOLockLock(fLock);
++	fBo[bo_h] = (Bo){ true, false, true, NULL, surf->memory, span, 0, gva };
++	IOLockUnlock(fLock);
++	surf->release();
++	im.handle        = bo_h;
++	im.bytes_per_row = bpr;
++	im.width         = w;
++	im.height        = h;
++	im.offset        = gva + in_page;
++	im.size          = plane_sz;
++	return sg_out(args, &im) ? kIOReturnSuccess : kIOReturnBadArgument;
++}
+ IOReturn
+ SweetGPUClient::gemInfo(IOExternalMethodArguments *args)
+ {
+@@ -326,16 +456,14 @@ SweetGPUClient::gemInfo(IOExternalMethodArguments *args)
+ 		return kIOReturnBadArgument;
+ 	}
+ 	switch (i.info) {
+-	case MSM_INFO_GET_OFFSET: i.value = i.handle; break;   /* there is no mmap offset: map memory type = handle */
+-	case MSM_INFO_GET_IOVA:   i.value = bo.gva; break;
+-	case MSM_INFO_GET_FLAGS:  i.value = bo.flags; break;
+-	case MSM_INFO_SET_NAME:   break;                       /* debug names are dropped */
+-	default:                  return kIOReturnUnsupported;
++		case MSM_INFO_GET_OFFSET: i.value = i.handle; break;
++		case MSM_INFO_GET_IOVA:   i.value = bo.gva; break;
++		case MSM_INFO_GET_FLAGS:  i.value = bo.flags; break;
++		case MSM_INFO_SET_NAME:   break;
++		default:                  return kIOReturnUnsupported;
+ 	}
+ 	return sg_out(args, &i) ? kIOReturnSuccess : kIOReturnBadArgument;
+ }
+-
+-/* CPU_PREP: whatever the direction, clean and invalidate the BO to the point of coherency. */
+ IOReturn
+ SweetGPUClient::gemPrep(IOExternalMethodArguments *args)
+ {
+@@ -348,12 +476,6 @@ SweetGPUClient::gemPrep(IOExternalMethodArguments *args)
+ 	IOLockUnlock(fLock);
+ 	return ok ? sg_ret(sweet_gsvc_bo_sync(p.handle)) : kIOReturnBadArgument;
+ }
+-
+-/*
+- * GEM_CLOSE only retires the handle: the memory may still be mapped in the client, and freeing it under a
+- * live mapping would hand those pages to someone else. It is released when the client closes, so a client
+- * has SG_MAX_BO buffers for its whole life (the service's own table size).
+- */
+ IOReturn
+ SweetGPUClient::gemClose(IOExternalMethodArguments *args)
+ {
+@@ -369,7 +491,6 @@ SweetGPUClient::gemClose(IOExternalMethodArguments *args)
+ 	IOLockUnlock(fLock);
+ 	return ok ? kIOReturnSuccess : kIOReturnBadArgument;
+ }
+-
+ IOReturn
+ SweetGPUClient::submit(IOExternalMethodArguments *args)
+ {
+@@ -378,13 +499,13 @@ SweetGPUClient::submit(IOExternalMethodArguments *args)
+ 		return kIOReturnBadArgument;
+ 	}
+ 	if (s.nr_cmds == 0 || s.nr_cmds > SG_MAX_IBS || s.nr_bos == 0 || s.nr_bos > SG_MAX_BOS ||
+-	    s.nr_in_syncobjs != 0 || s.nr_out_syncobjs != 0) {
++		s.nr_in_syncobjs != 0 || s.nr_out_syncobjs != 0) {
+ 		return kIOReturnBadArgument;
+-	}
+-	if (!sg_usable()) {
+-		return kIOReturnNotReady;
+-	}
+-	struct drm_msm_gem_submit_cmd cmds[SG_MAX_IBS];
++		}
++		if (!sg_usable()) {
++			return kIOReturnNotReady;
++		}
++		struct drm_msm_gem_submit_cmd cmds[SG_MAX_IBS];
+ 	struct sweet_gsvc_ib ibs[SG_MAX_IBS];
+ 	size_t bos_size = s.nr_bos * sizeof(struct drm_msm_gem_submit_bo);
+ 	struct drm_msm_gem_submit_bo *bos = (struct drm_msm_gem_submit_bo *)IOMalloc(bos_size);
+@@ -397,25 +518,24 @@ SweetGPUClient::submit(IOExternalMethodArguments *args)
+ 	}
+ 	IOLockLock(fLock);
+ 	for (uint32_t i = 0; i < s.nr_cmds; i++) {
+-		/* addresses are fixed, so there is nothing to relocate; one kind of command buffer */
+ 		if (cmds[i].type != MSM_SUBMIT_CMD_BUF || cmds[i].nr_relocs != 0 || cmds[i].submit_idx >= s.nr_bos ||
+-		    (cmds[i].size & 3u) || cmds[i].size == 0) {
+-			IOLockUnlock(fLock);
+-			IOFree(bos, bos_size);
+-			return kIOReturnBadArgument;
+-		}
+-		uint32_t h = bos[cmds[i].submit_idx].handle;
+-		if (!owns(h)) {
++			(cmds[i].size & 3u) || cmds[i].size == 0) {
+ 			IOLockUnlock(fLock);
+-			IOFree(bos, bos_size);
+-			return kIOReturnBadArgument;
+-		}
+-		ibs[i] = (struct sweet_gsvc_ib){ h, cmds[i].submit_offset, cmds[i].size / 4u };
++		IOFree(bos, bos_size);
++		return kIOReturnBadArgument;
++			}
++			uint32_t h = bos[cmds[i].submit_idx].handle;
++			if (!owns(h)) {
++				IOLockUnlock(fLock);
++				IOFree(bos, bos_size);
++				return kIOReturnBadArgument;
++			}
++			ibs[i] = (struct sweet_gsvc_ib){ h, cmds[i].submit_offset, cmds[i].size / 4u };
+ 	}
+ 	IOLockUnlock(fLock);
+ 	IOFree(bos, bos_size);
+ 	for (uint32_t i = 0; i < s.nr_cmds; i++) {
+-		(void)sweet_gsvc_bo_sync(ibs[i].handle);       /* what the CPU wrote reaches DRAM before the CP reads it */
++		(void)sweet_gsvc_bo_sync(ibs[i].handle);
+ 	}
+ 	uint32_t seq = 0;
+ 	int e = sweet_gsvc_submit(ibs, s.nr_cmds, &seq);
+@@ -428,8 +548,6 @@ SweetGPUClient::submit(IOExternalMethodArguments *args)
+ 	s.fence = seq;
+ 	return sg_out(args, &s) ? kIOReturnSuccess : kIOReturnBadArgument;
+ }
+-
+-/* timeout is an absolute time on the uptime clock, like msm's CLOCK_MONOTONIC */
+ IOReturn
+ SweetGPUClient::waitFence(IOExternalMethodArguments *args)
+ {
+@@ -446,8 +564,6 @@ SweetGPUClient::waitFence(IOExternalMethodArguments *args)
+ 	}
+ 	return sg_ret(sweet_gsvc_wait(w.fence, (uint32_t)ms));
+ }
+-
+-/* One ring: any priority and flags are accepted and every queue is the same; ids only count */
+ IOReturn
+ SweetGPUClient::queueNew(IOExternalMethodArguments *args)
+ {
+@@ -460,12 +576,10 @@ SweetGPUClient::queueNew(IOExternalMethodArguments *args)
+ 	IOLockUnlock(fLock);
+ 	return sg_out(args, &q) ? kIOReturnSuccess : kIOReturnBadArgument;
+ }
+-
+-static uint64_t sweet_gpu_logged[2];    /* selectors already logged, by the low 7 bits */
+-
++static uint64_t sweet_gpu_logged[2];
+ IOReturn
+ SweetGPUClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+-    __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target, __unused void *reference)
++							   __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target, __unused void *reference)
+ {
+ 	uint64_t *seen = &sweet_gpu_logged[(selector >> 6) & 1u];
+ 	if (!(*seen & (1ull << (selector & 63u)))) {
+@@ -473,36 +587,38 @@ SweetGPUClient::externalMethod(uint32_t selector, IOExternalMethodArguments *arg
+ 		IOLog("SWEET GPU: selector %#x\n", selector);
+ 	}
+ 	switch (selector) {
+-	case SWEET_MSM_BASE + DRM_MSM_GET_PARAM:
+-		return getParam(args);
+-	case SWEET_MSM_BASE + DRM_MSM_GEM_NEW:
+-		return gemNew(args);
+-	case SWEET_MSM_BASE + DRM_MSM_GEM_INFO:
+-		return gemInfo(args);
+-	case SWEET_MSM_BASE + DRM_MSM_GEM_CPU_PREP:
+-		return gemPrep(args);
+-	case SWEET_MSM_BASE + DRM_MSM_GEM_CPU_FINI:
+-		return args->structureInputSize == sizeof(struct drm_msm_gem_cpu_fini) ? kIOReturnSuccess : kIOReturnBadArgument;
+-	case SWEET_MSM_BASE + DRM_MSM_GEM_SUBMIT:
+-		return submit(args);
+-	case SWEET_MSM_BASE + DRM_MSM_WAIT_FENCE:
+-		return waitFence(args);
+-	case SWEET_MSM_BASE + DRM_MSM_SUBMITQUEUE_NEW:
+-		return queueNew(args);
+-	case SWEET_MSM_BASE + DRM_MSM_SUBMITQUEUE_CLOSE:
+-		return kIOReturnSuccess;
+-	case SWEET_GPU_SEL_INFO: {
+-		struct sweet_gsvc_info info;
+-		struct sweet_gpu_abi_info out;
+-		sweet_gsvc_info(&info);
+-		out = (struct sweet_gpu_abi_info){ SWEET_GPU_ABI, info.chip_id, info.gmem_size, info.gmem_base,
+-			                           info.window_base, info.window_size };
+-		return sg_out(args, &out) ? kIOReturnSuccess : kIOReturnBadArgument;
+-	}
+-	case SWEET_GPU_SEL_GEM_CLOSE:
+-		return gemClose(args);
+-	default:
+-		return kIOReturnUnsupported;
++		case SWEET_MSM_BASE + DRM_MSM_GET_PARAM:
++			return getParam(args);
++		case SWEET_MSM_BASE + DRM_MSM_GEM_NEW:
++			return gemNew(args);
++		case SWEET_MSM_BASE + DRM_MSM_GEM_INFO:
++			return gemInfo(args);
++		case SWEET_MSM_BASE + DRM_MSM_GEM_CPU_PREP:
++			return gemPrep(args);
++		case SWEET_MSM_BASE + DRM_MSM_GEM_CPU_FINI:
++			return args->structureInputSize == sizeof(struct drm_msm_gem_cpu_fini) ? kIOReturnSuccess : kIOReturnBadArgument;
++		case SWEET_MSM_BASE + DRM_MSM_GEM_SUBMIT:
++			return submit(args);
++		case SWEET_MSM_BASE + DRM_MSM_WAIT_FENCE:
++			return waitFence(args);
++		case SWEET_MSM_BASE + DRM_MSM_SUBMITQUEUE_NEW:
++			return queueNew(args);
++		case SWEET_MSM_BASE + DRM_MSM_SUBMITQUEUE_CLOSE:
++			return kIOReturnSuccess;
++		case SWEET_GPU_SEL_INFO: {
++			struct sweet_gsvc_info info;
++			struct sweet_gpu_abi_info out;
++			sweet_gsvc_info(&info);
++			out = (struct sweet_gpu_abi_info){ SWEET_GPU_ABI, info.chip_id, info.gmem_size, info.gmem_base,
++				info.window_base, info.window_size };
++				return sg_out(args, &out) ? kIOReturnSuccess : kIOReturnBadArgument;
++		}
++		case SWEET_GPU_SEL_GEM_CLOSE:
++			return gemClose(args);
++		case SWEET_GPU_SEL_IMPORT_IOSURFACE:
++			return importIOSurface(args);
++		default:
++			return kIOReturnUnsupported;
+ 	}
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/iokit/Kernel/arm/sweet_msm.h b/iokit/Kernel/arm/sweet_msm.h
+index 5bd0c10..9009f29 100644
+--- a/iokit/Kernel/arm/sweet_msm.h
++++ b/iokit/Kernel/arm/sweet_msm.h
+@@ -47,6 +47,7 @@
+ /* selectors that are not msm's */
+ #define SWEET_GPU_SEL_INFO        0x70u
+ #define SWEET_GPU_SEL_GEM_CLOSE   0x72u
++#define SWEET_GPU_SEL_IMPORT_IOSURFACE 0x73u
+ #define SWEET_GPU_ABI             1u
+ 
+ #define MSM_PARAM_GPU_ID          0x01
+@@ -60,6 +61,17 @@
+ #define MSM_PARAM_VA_START        0x0e
+ #define MSM_PARAM_VA_SIZE         0x0f
+ 
++struct sweet_gpu_import_iosurface {
++	uint32_t surface_id;
++	uint32_t plane;
++	uint32_t handle;
++	uint32_t bytes_per_row;
++	uint32_t width;
++	uint32_t height;
++	uint64_t offset;   /* GPU VA of the plane's first byte */
++	uint64_t size;     /* plane byte size */
++};
++
+ struct drm_msm_timespec {
+ 	int64_t tv_sec;
+ 	int64_t tv_nsec;
