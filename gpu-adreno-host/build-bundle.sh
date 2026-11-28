@@ -56,7 +56,7 @@ strip = ['xcrun', '--sdk', 'iphoneos', 'strip']
 pkg-config = '$(command -v pkg-config)'
 
 [built-in options]
-c_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0', '-include', 'dlfcn.h']
+c_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0', '-include', 'dlfcn.h', '-DUTIL_ARCH_LITTLE_ENDIAN=1', '-DUTIL_ARCH_BIG_ENDIAN=0']
 cpp_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0']
 objc_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0']
 objcpp_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0']
@@ -94,7 +94,7 @@ LIBS=$(cd "$B" && for t in $T; do echo "$B/$t"; done)
 # ---------------------------------------------------------------- the driver
 log "driver objects"
 I="$SRC"
-CF="-DNDEBUG -D__APPLE__ -DHAVE_STRUCT_TIMESPEC -DHAVE_PTHREAD -DHAVE_ENDIAN_H -DHAVE_DLFCN_H -DHAVE_SYS_SYSCTL_H -include dlfcn.h
+CF="-DNDEBUG -D__APPLE__ -DUTIL_ARCH_LITTLE_ENDIAN=1 -DUTIL_ARCH_BIG_ENDIAN=0 -DHAVE_STRUCT_TIMESPEC -DHAVE_PTHREAD -DHAVE_ENDIAN_H -DHAVE_DLFCN_H -DHAVE_SYS_SYSCTL_H -include dlfcn.h
  -I$I/include -I$I/src -I$B/src -I$B/include
  -I$I/src/gallium/include -I$I/src/gallium/auxiliary -I$B/src/gallium/auxiliary
  -I$I/src/gallium/drivers -I$I/src/gallium/winsys
