@@ -243,8 +243,10 @@ s = re.sub(
         static driOptionCache info, options;
         static bool parsed = false;
         if (!parsed) {
+            driConfigFileParseParams params = {0};
+            params.driverName = "msm";
             driParseOptionInfo(&info, freedreno_driconf, ARRAY_SIZE(freedreno_driconf));
-            driParseConfigFiles(&options, &info, 0, "msm", NULL, NULL, NULL, 0, NULL, 0);
+            driParseConfigFiles(&options, &info, &params);
             parsed = true;
         }
         struct pipe_screen_config config = {
