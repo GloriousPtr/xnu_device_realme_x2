@@ -17,7 +17,7 @@ Libs: -L\${libdir} -ldrm-xnu
 Cflags: -I\${includedir} -I\${includedir}/libdrm
 EOT
 export PKG_CONFIG_PATH=$PC:${BREW_PREFIX:-/opt/homebrew}/lib/pkgconfig
-exec nice -n 19 meson setup "$@" "$BUILD" "$SRC" --buildtype=release -Ddefault_library=static -Db_ndebug=true -Dc_args=-g0 -Dcpp_args=-g0 \
+exec nice -n 19 meson setup "$@" "$BUILD" "$SRC" --buildtype=release -Ddefault_library=static -Db_ndebug=true -Dc_args=-g0,-include,dlfcn.h -Dcpp_args=-g0 \
   -Dplatforms= -Dgallium-drivers=freedreno -Dvulkan-drivers= -Dopengl=false -Dgles1=disabled -Dgles2=disabled -Degl=disabled \
   -Dglx=disabled -Dgbm=disabled -Dllvm=disabled -Ddraw-use-llvm=false -Dexpat=disabled -Dxmlconfig=disabled -Dvalgrind=disabled \
   -Dlibunwind=disabled -Dlmsensors=disabled -Dbuild-tests=false -Dtools= -Dvideo-codecs= -Dgallium-va=disabled -Dperfetto=false \
