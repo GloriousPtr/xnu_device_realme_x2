@@ -236,7 +236,22 @@ s = re.sub(
             free(dev);
             return NULL;
         }
-        struct pipe_screen_config config = { 0 };
+        static const driOptionDescription freedreno_driconf[] = {
+            DRI_CONF_SECTION_DEBUG
+            DRI_CONF_SECTION_END
+        };
+        static driOptionCache info, options;
+        static bool parsed = false;
+        if (!parsed) {
+            driParseOptionInfo(&info, freedreno_driconf, ARRAY_SIZE(freedreno_driconf));
+            driParseConfigFiles(&options, &info, 0, "msm", NULL, NULL, NULL, 0, NULL, 0);
+            parsed = true;
+        }
+        struct pipe_screen_config config = {
+            .driver_name_is_inferred = false,
+            .options = &options,
+            .options_info = &info,
+        };
         dev->screen = fd_drm_screen_create_renderonly(dev->fd, NULL, &config);
         dev->panfrost = true;''',
     s, count=1, flags=re.S)
