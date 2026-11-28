@@ -2,6 +2,7 @@
 # Mesa with freedreno for the Mac host, against libdrm-xnu from the Mali tree. Experiment: host only, no phone.
 #   MALI=path/to/mapple_gpu_mali SRC=unpacked mesa-26.2.6 (with the Mali patch 0001 and ours applied) BUILD=build dir
 set -euo pipefail
+export CFLAGS="-g0 -include dlfcn.h"
 : "${MALI:?}" "${SRC:?}" "${BUILD:?}"
 PC=$BUILD.pc
 mkdir -p "$PC"
@@ -17,7 +18,7 @@ Libs: -L\${libdir} -ldrm-xnu
 Cflags: -I\${includedir} -I\${includedir}/libdrm
 EOT
 export PKG_CONFIG_PATH=$PC:${BREW_PREFIX:-/opt/homebrew}/lib/pkgconfig
-exec nice -n 19 meson setup "$@" "$BUILD" "$SRC" --buildtype=release -Ddefault_library=static -Db_ndebug=true -Dc_args=-g0,-include,dlfcn.h -Dcpp_args=-g0 \
+exec nice -n 19 meson setup "$@" "$BUILD" "$SRC" --buildtype=release -Ddefault_library=static -Db_ndebug=true -Dcpp_args=-g0 \
   -Dplatforms= -Dgallium-drivers=freedreno -Dvulkan-drivers= -Dopengl=false -Dgles1=disabled -Dgles2=disabled -Degl=disabled \
   -Dglx=disabled -Dgbm=disabled -Dllvm=disabled -Ddraw-use-llvm=false -Dexpat=disabled -Dxmlconfig=disabled -Dvalgrind=disabled \
   -Dlibunwind=disabled -Dlmsensors=disabled -Dbuild-tests=false -Dtools= -Dvideo-codecs= -Dgallium-va=disabled -Dperfetto=false \

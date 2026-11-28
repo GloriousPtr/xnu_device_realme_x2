@@ -67,7 +67,7 @@ jobs:
           nm -g --defined-only "$O/libdrm-xnu.a" | awk '$2=="T"{print $3}' | sort
 
       - name: Configure Mesa (freedreno, host)
-        run: CFLAGS="-include dlfcn.h" bash gpu-adreno-host/configure-host.sh
+        run: bash gpu-adreno-host/configure-host.sh
 
       - name: Build every static library
         run: |
