@@ -67,14 +67,13 @@ jobs:
           nm -g --defined-only "$O/libdrm-xnu.a" | awk '$2=="T"{print $3}' | sort
 
       - name: Configure Mesa (freedreno, host)
-        run: bash gpu-adreno-host/configure-host.sh
+        run: CFLAGS="-include dlfcn.h" bash gpu-adreno-host/configure-host.sh
 
       - name: Build every static library
         run: |
-          # Frontends are disabled, so "ninja all" builds almost nothing: ask for the archives explicitly.
           T=$(ninja -C "$BUILD" -t targets all | sed -n 's/^\(src\/.*\.a\): .*/\1/p')
-          echo "$T"
-          ninja -C "$BUILD" $T
+          ninja -C "$BUILD" -k 0 $T 2>&1 | tee "$RUNNER_TEMP/build.log"
+          test "${PIPESTATUS[0]}" -eq 0
 
       - name: Check libdrm-xnu defines every drm* symbol Mesa's freedreno archives need
         run: |
