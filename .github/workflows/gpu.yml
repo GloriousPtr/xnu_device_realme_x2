@@ -1,53 +1,99 @@
-name: adreno-metal-driver
+name: adreno-host
+
+# Mesa 26.2.6 + freedreno on the macOS host, against libdrm-xnu built from xf86drm_msm.c / msm_gpu.c.
+# Host only (no phone, no kernel): proves the Mesa patches apply, freedreno configures and compiles on Darwin,
+# the libdrm stand-in defines every drm* symbol Mesa needs, and the entry points work against msm_mock.c.
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "gpu-adreno/**"
-      - ".github/workflows/gpu.yml"
+      - "gpu-adreno-host/**"
+      - ".github/workflows/adreno-host.yml"
+
+env:
+  MESA_TAG: mesa-26.2.6
+  # Pin this to a commit once it works, so upstream changes cannot break the build.
+  MALI_REPO: https://github.com/open-mapple/mapple_gpu_mali
 
 jobs:
-  build-gpu:
-    runs-on: macos-15
+  build:
+    runs-on: macos-15        # Apple Silicon: Homebrew lives in /opt/homebrew, as configure-host.sh expects
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Xcode 15 and Homebrew tools
+      - name: Tools
         run: |
-          brew install pkgconf bison
+          brew install pkgconf bison flex zstd
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q meson ninja mako pyyaml packaging
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
-          XC=$(ls -d /Applications/Xcode_15*.app 2>/dev/null | sort -V | tail -1)
-          [ -n "$XC" ] || XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
-          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
-          sudo xcode-select -s "$XC"
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-path
+          echo "/opt/homebrew/opt/flex/bin" >> "$GITHUB_PATH"
 
-      - name: Clone mapple_gpu_mali and apply Adreno freedreno overlay
+      - name: Fetch the Mali tree (libdrm-xnu headers, Mesa patch 0001) and Mesa
         run: |
-          git clone --depth 1 https://github.com/open-mapple/mapple_gpu_mali gpu
-          python3 gpu-adreno/prepare-adreno-gpu.py "$PWD/gpu"
+          git clone -q --depth 1 "$MALI_REPO" "$RUNNER_TEMP/mali"
+          git clone -q --depth 1 --branch "$MESA_TAG" https://gitlab.freedesktop.org/mesa/mesa.git "$RUNNER_TEMP/mesa"
+          echo "MALI=$RUNNER_TEMP/mali" >> "$GITHUB_ENV"
+          echo "SRC=$RUNNER_TEMP/mesa" >> "$GITHUB_ENV"
+          echo "BUILD=$RUNNER_TEMP/build-host" >> "$GITHUB_ENV"
 
-      - name: Build Mesa (freedreno) + MappleMTLDriver.bundle for iOS 16
+      - name: Apply patches (Mali 0001 only, then ours, in this order)
         run: |
-          bash gpu/ios/build.sh mesa
-          I="$PWD/gpu/mesa/src"
-          B="$PWD/gpu/mesa/build-ios"
-          cat > gpu/ios/out/cflags.txt <<EOC
-          -DNDEBUG -D__APPLE__ -DHAVE_STRUCT_TIMESPEC -DHAVE_PTHREAD -DHAVE_ENDIAN_H -DHAVE_DLFCN_H -DHAVE_SYS_SYSCTL_H
-          -I$I/include -I$I/src -I$B/src
-          -I$I/src/gallium/include -I$I/src/gallium/auxiliary -I$B/src/gallium/auxiliary
-          -I$I/src/gallium/drivers -I$I/src/gallium/winsys
-          -I$I/src/compiler -I$B/src/compiler -I$I/src/compiler/nir -I$B/src/compiler/nir
-          -I$I/src/freedreno -I$B/src/freedreno -I$I/src/freedreno/common -I$B/src/freedreno/registers
-          EOC
-          bash gpu/ios/build.sh driver
+          # Ours are diffed against the tree after Mali's 0001 (meson.build index 9fe4893), not after 0002..0009.
+          for p in "$MALI/mesa/patches/0001-meson-darwin-libdrm.patch" \
+                   gpu-adreno-host/patches/0001-freedreno-on-darwin.patch \
+                   gpu-adreno-host/patches/0002-freedreno-xnu-bo-map.patch; do
+            echo "== $p"
+            git -C "$SRC" apply --check "$p"
+            git -C "$SRC" apply "$p"
+          done
 
-      - name: Upload MappleMTLDriver.bundle artifact
-        uses: actions/upload-artifact@v4
+      - name: Build libdrm-xnu.a (Adreno side)
+        run: |
+          A="$PWD/gpu-adreno-host/libdrm"
+          O="$MALI/libdrm-xnu/out"
+          mkdir -p "$O"
+          for f in xf86drm_msm msm_gpu; do
+            cc -O2 -g -Wall -Wno-unused-parameter -fPIC \
+               -I"$MALI/libdrm-xnu/include" -I"$MALI/libdrm-xnu/include/libdrm" -I"$A" \
+               -c "$A/$f.c" -o "$O/$f.o"
+          done
+          rm -f "$O/libdrm-xnu.a"
+          libtool -static -o "$O/libdrm-xnu.a" "$O/xf86drm_msm.o" "$O/msm_gpu.o"
+          nm -g --defined-only "$O/libdrm-xnu.a" | awk '$2=="T"{print $3}' | sort
+
+      - name: Configure Mesa (freedreno, host)
+        run: bash gpu-adreno-host/configure-host.sh
+
+      - name: Build every static library
+        run: |
+          # Frontends are disabled, so "ninja all" builds almost nothing: ask for the archives explicitly.
+          T=$(ninja -C "$BUILD" -t targets all | sed -n 's/^\(src\/.*\.a\): .*/\1/p')
+          echo "$T"
+          ninja -C "$BUILD" $T
+
+      - name: Check libdrm-xnu defines every drm* symbol Mesa's freedreno archives need
+        run: |
+          nm -u $(find "$BUILD" -name '*.a') 2>/dev/null | awk '$1=="U" && $2 ~ /^_drm/ {print $2}' | sort -u > "$RUNNER_TEMP/need.txt"
+          nm -g --defined-only "$MALI/libdrm-xnu/out/libdrm-xnu.a" | awk '$2=="T"{print $3}' | sort -u > "$RUNNER_TEMP/have.txt"
+          echo "needed:";  cat "$RUNNER_TEMP/need.txt"
+          echo "missing:"; comm -23 "$RUNNER_TEMP/need.txt" "$RUNNER_TEMP/have.txt" | tee "$RUNNER_TEMP/missing.txt"
+          [ ! -s "$RUNNER_TEMP/missing.txt" ]
+
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p out
+          cp "$MALI/libdrm-xnu/out/libdrm-xnu.a" out/ 2>/dev/null || true
+          cp "$BUILD/meson-logs/meson-log.txt" out/ 2>/dev/null || true
+          find "$BUILD" -name '*.a' -path '*src/*' -exec cp {} out/ \; 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: MappleMTLDriver-adreno-x2
-          path: gpu/ios/out/MappleMTLDriver.bundle/
+          name: adreno-host
+          path: out/
