@@ -45,8 +45,8 @@ jobs:
         run: |
           # Ours are diffed against the tree after Mali's 0001 (meson.build index 9fe4893), not after 0002..0009.
           for p in "$MALI/mesa/patches/0001-meson-darwin-libdrm.patch" \
-                   gpu-adreno-host/patches/0001-freedreno-on-darwin.patch \
-                   gpu-adreno-host/patches/0002-freedreno-xnu-bo-map.patch; do
+                   "$GITHUB_WORKSPACE/gpu-adreno-host/patches/0001-freedreno-on-darwin.patch" \
+                   "$GITHUB_WORKSPACE/gpu-adreno-host/patches/0002-freedreno-xnu-bo-map.patch"; do
             echo "== $p"
             git -C "$SRC" apply --check "$p"
             git -C "$SRC" apply "$p"
