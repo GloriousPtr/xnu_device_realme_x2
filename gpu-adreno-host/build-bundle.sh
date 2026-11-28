@@ -49,6 +49,8 @@ arch_flags = ['-arch', 'arm64', '-isysroot', sdk, '-mios-version-min=16.0']
 [binaries]
 c = ['xcrun', '--sdk', 'iphoneos', 'clang']
 cpp = ['xcrun', '--sdk', 'iphoneos', 'clang++']
+objc = ['xcrun', '--sdk', 'iphoneos', 'clang']
+objcpp = ['xcrun', '--sdk', 'iphoneos', 'clang++']
 ar = ['xcrun', '--sdk', 'iphoneos', 'ar']
 strip = ['xcrun', '--sdk', 'iphoneos', 'strip']
 pkg-config = '$(command -v pkg-config)'
@@ -56,10 +58,12 @@ pkg-config = '$(command -v pkg-config)'
 [built-in options]
 c_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0', '-include', 'dlfcn.h']
 cpp_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0']
+objc_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0']
+objcpp_args = arch_flags + ['-target', 'arm64-apple-ios16.0', '-g0']
 c_link_args = arch_flags + ['-target', 'arm64-apple-ios16.0']
 cpp_link_args = arch_flags + ['-target', 'arm64-apple-ios16.0']
-default_library = 'static'
-buildtype = 'release'
+objc_link_args = arch_flags + ['-target', 'arm64-apple-ios16.0']
+objcpp_link_args = arch_flags + ['-target', 'arm64-apple-ios16.0']
 
 [properties]
 pkg_config_libdir = ['$OUT/pc']
