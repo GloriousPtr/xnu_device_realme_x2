@@ -13,47 +13,44 @@
 #include "xf86drm.h"
 #include "libdrm/drm.h"
 #include "../../uapi/sweet_msm.h"
+
 int vgpu_open(void);
+uint64_t vgpu_conn_id(int fd);
 int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);
 void *vgpu_mmap(int fd, uint64_t token, size_t size);
 int vgpu_munmap(int fd, void *addr, size_t size);
-
-int vgpu_open(void);
-int vgpu_ioctl_raw(int fd, uint32_t sel, void *arg, size_t size);
-void *vgpu_mmap(int fd, uint64_t token, size_t size);
-int vgpu_munmap(int fd, void *addr, size_t size);
-
-
 
 static int ret_errno(int r) { if (r < 0) { errno = -r; return -1; } return r; }
 
-typedef struct { int fd; uint32_t handle; uint32_t in_page; uint32_t surface, plane; } BOInfo;
+typedef struct { uint64_t conn_id; uint32_t handle; uint32_t in_page; uint32_t surface, plane; } BOInfo;
 static BOInfo g_bo[2048];
 static unsigned g_bo_count;
 static pthread_mutex_t g_bo_lock = PTHREAD_MUTEX_INITIALIZER;
 
-typedef struct { void *addr; size_t size; int fd; void *base; size_t map_size; uint64_t token; bool idle; } Mapping;
+typedef struct { void *addr; size_t size; uint64_t conn_id; void *base; size_t map_size; uint64_t token; bool idle; } Mapping;
 static Mapping *g_maps;
 static size_t g_map_count, g_map_cap;
 static pthread_mutex_t g_map_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void map_cache_drop(int fd, uint32_t handle)
 {
+    uint64_t cid = vgpu_conn_id(fd);
     pthread_mutex_lock(&g_map_lock);
     for (size_t i = 0; i < g_map_count;) {
         Mapping m = g_maps[i];
-        if (m.fd != fd || m.token != handle) { i++; continue; }
+        if (m.conn_id != cid || m.token != handle) { i++; continue; }
         g_maps[i] = g_maps[--g_map_count];
-        vgpu_munmap(m.fd, m.base, m.map_size);
+        vgpu_munmap(fd, m.base, m.map_size);
     }
     pthread_mutex_unlock(&g_map_lock);
 }
 
 static void bo_forget(int fd, uint32_t handle)
 {
+    uint64_t cid = vgpu_conn_id(fd);
     pthread_mutex_lock(&g_bo_lock);
     for (unsigned i = 0; i < g_bo_count; i++) {
-        if (g_bo[i].fd == fd && g_bo[i].handle == handle) {
+        if (g_bo[i].conn_id == cid && g_bo[i].handle == handle) {
             g_bo[i] = g_bo[--g_bo_count];
             break;
         }
@@ -79,8 +76,9 @@ int drmIoctl(int fd, unsigned long request, void *arg)
         unsigned msm_cmd = nr - DRM_COMMAND_BASE;
         uint32_t sel = SWEET_MSM_BASE + msm_cmd;
         int r = vgpu_ioctl_raw(fd, sel, arg, (size_t)((request >> 16) & 0x3fffu));
-        if (!r && msm_cmd == DRM_MSM_GEM_SUBMIT && fd >= 0 && fd < 1024) {
-            g_last_submit_fence[fd] = ((struct drm_msm_gem_submit *)arg)->fence;
+        uint64_t cid = vgpu_conn_id(fd);
+        if (!r && msm_cmd == DRM_MSM_GEM_SUBMIT && cid > 0 && cid < 1024) {
+            g_last_submit_fence[cid] = ((struct drm_msm_gem_submit *)arg)->fence;
         }
         return ret_errno(r);
     }
@@ -119,10 +117,13 @@ int drmCloseBufferHandle(int fd, uint32_t handle)
 
 int drmMap(int fd, drm_handle_t handle, drmSize size, drmAddressPtr address)
 {
+    uint64_t cid = vgpu_conn_id(fd);
+    if (!cid) { errno = EBADF; return -EBADF; }
+
     pthread_mutex_lock(&g_map_lock);
     for (size_t i = 0; i < g_map_count; i++) {
         Mapping *m = &g_maps[i];
-        if (m->idle && m->fd == fd && m->token == (uint64_t)handle && m->size == size) {
+        if (m->idle && m->conn_id == cid && m->token == (uint64_t)handle && m->size == size) {
             m->idle = false;
             *address = m->addr;
             pthread_mutex_unlock(&g_map_lock);
@@ -130,18 +131,29 @@ int drmMap(int fd, drm_handle_t handle, drmSize size, drmAddressPtr address)
         }
     }
     pthread_mutex_unlock(&g_map_lock);
+
     uint32_t in_page = 0;
     pthread_mutex_lock(&g_bo_lock);
-    for (unsigned i = 0; i < g_bo_count; i++)
-        if (g_bo[i].fd == fd && g_bo[i].handle == (uint32_t)handle) { in_page = g_bo[i].in_page; break; }
-        pthread_mutex_unlock(&g_bo_lock);
+    for (unsigned i = 0; i < g_bo_count; i++) {
+        if (g_bo[i].conn_id == cid && g_bo[i].handle == (uint32_t)handle) {
+            in_page = g_bo[i].in_page;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_bo_lock);
+
     size_t map_size = size + in_page;
     void *p = vgpu_mmap(fd, (uint64_t)handle, map_size);
     if (!p) return -errno;
+
     pthread_mutex_lock(&g_map_lock);
-    if (g_map_count == g_map_cap) { g_map_cap = g_map_cap ? g_map_cap * 2 : 256; g_maps = realloc(g_maps, g_map_cap * sizeof(*g_maps)); }
-    g_maps[g_map_count++] = (Mapping){ (uint8_t *)p + in_page, size, fd, p, map_size, (uint64_t)handle, false };
+    if (g_map_count == g_map_cap) {
+        g_map_cap = g_map_cap ? g_map_cap * 2 : 256;
+        g_maps = realloc(g_maps, g_map_cap * sizeof(*g_maps));
+    }
+    g_maps[g_map_count++] = (Mapping){ (uint8_t *)p + in_page, size, cid, p, map_size, (uint64_t)handle, false };
     pthread_mutex_unlock(&g_map_lock);
+
     *address = (uint8_t *)p + in_page;
     return 0;
 }
@@ -208,6 +220,9 @@ void vmg_drm_surface_fd_close(int fd)
 
 int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)
 {
+    uint64_t cid = vgpu_conn_id(fd);
+    if (!cid) { errno = EBADF; return -EBADF; }
+
     SurfaceFd sf = {0};
     pthread_mutex_lock(&g_surf_lock);
     for (unsigned i = 0; i < 256; i++) if (g_surf[i].fd == prime_fd) sf = g_surf[i];
@@ -217,7 +232,7 @@ int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)
 
     pthread_mutex_lock(&g_bo_lock);
     for (unsigned i = 0; i < g_bo_count; i++) {
-        if (g_bo[i].fd == fd && g_bo[i].surface == sf.surface && g_bo[i].plane == sf.plane) {
+        if (g_bo[i].conn_id == cid && g_bo[i].surface == sf.surface && g_bo[i].plane == sf.plane) {
             *handle = g_bo[i].handle;
             pthread_mutex_unlock(&g_bo_lock);
             return 0;
@@ -230,7 +245,7 @@ int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)
     if (r) { errno = -r; return r; }
     pthread_mutex_lock(&g_bo_lock);
     if (g_bo_count < 2048) {
-        g_bo[g_bo_count++] = (BOInfo){ fd, im.handle, (uint32_t)(im.offset & 0x3fffu), sf.surface, sf.plane };
+        g_bo[g_bo_count++] = (BOInfo){ cid, im.handle, (uint32_t)(im.offset & 0x3fffu), sf.surface, sf.plane };
     }
     pthread_mutex_unlock(&g_bo_lock);
     *handle = im.handle;
@@ -246,10 +261,11 @@ int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd)
 int drmSyncobjCreate(int fd, uint32_t flags, uint32_t *handle)
 {
     (void)flags;
+    uint64_t cid = vgpu_conn_id(fd);
     pthread_mutex_lock(&g_sync_lock);
     for (uint32_t i = 1; i < 512; i++) {
         if (!g_syncobjs[i].used) {
-            g_syncobjs[i] = (SoftSyncobj){ true, (fd >= 0 && fd < 1024) ? g_last_submit_fence[fd] : 0 };
+            g_syncobjs[i] = (SoftSyncobj){ true, (cid > 0 && cid < 1024) ? g_last_submit_fence[cid] : 0 };
             *handle = i;
             pthread_mutex_unlock(&g_sync_lock);
             return 0;
@@ -288,7 +304,6 @@ int drmSyncobjWait(int fd, uint32_t *handles, unsigned num_handles, int64_t time
     }
     return 0;
 }
-
 int drmSyncobjReset(int fd, const uint32_t *handles, uint32_t count) { (void)fd; (void)handles; (void)count; return 0; }
 int drmSyncobjSnapshotXNU(int fd, uint32_t src, uint32_t *handle) { (void)src; return drmSyncobjCreate(fd, 0, handle); }
 int drmSyncobjReleaseXNU(int fd, uint32_t handle) { return drmSyncobjDestroy(fd, handle); }
@@ -306,17 +321,14 @@ int drmSyncobjImportSyncFile(int fd, uint32_t handle, int sync_file_fd) { (void)
 int drmSyncobjFDToHandle(int fd, int obj_fd, uint32_t *handle) { (void)fd; (void)obj_fd; (void)handle; errno = ENOSYS; return -ENOSYS; }
 int drmSyncobjTimelineWait(int fd, uint32_t *handles, uint64_t *points, unsigned num_handles, int64_t timeout_nsec, unsigned flags, uint32_t *first_signaled) { return drmSyncobjWait(fd, handles, num_handles, timeout_nsec, flags, first_signaled); }
 int drmSyncobjTransfer(int fd, uint32_t dst_handle, uint64_t dst_point, uint32_t src_handle, uint64_t src_point, uint32_t flags) { (void)dst_point; (void)src_point; (void)flags; return drmSyncobjCopyXNU(fd, dst_handle, src_handle); }
-
 int drmCommandWrite(int fd, unsigned long drmCommandIndex, void *data, unsigned long size)
 {
     return ret_errno(vgpu_ioctl_raw(fd, (uint32_t)(SWEET_MSM_BASE + drmCommandIndex), data, (size_t)size));
 }
-
 int drmCommandWriteRead(int fd, unsigned long drmCommandIndex, void *data, unsigned long size)
 {
     return ret_errno(vgpu_ioctl_raw(fd, (uint32_t)(SWEET_MSM_BASE + drmCommandIndex), data, (size_t)size));
 }
-
 int drmGetCap(int fd, uint64_t capability, uint64_t *value)
 {
     (void)fd;
@@ -324,7 +336,6 @@ int drmGetCap(int fd, uint64_t capability, uint64_t *value)
     *value = (capability == 0x13 || capability == 0x14) ? 1 : 0;
     return 0;
 }
-
 int drmOpenWithType(const char *name, const char *busid, int type)
 {
     (void)name; (void)busid; (void)type;

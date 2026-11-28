@@ -20,7 +20,9 @@ open(f"{gpu_dir}/vgpu/vgpu.c", "w").write("""
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 enum vgpu_selector { VGPU_SEL_DUMMY = 0 };
@@ -34,51 +36,141 @@ struct vgpu_backend {
 };
 extern const struct vgpu_backend vgpu_backend_iokit;
 
-#define MAX_FDS 1024
-static void *g_conn[MAX_FDS];
+#define MAX_CONNS 256
+typedef struct {
+    bool used;
+    uint64_t id;
+    dev_t dev;
+    ino_t ino;
+    void *conn;
+} ConnEntry;
+
+static ConnEntry g_conns[MAX_CONNS];
+static uint64_t g_next_id = 1;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic uint64_t g_cnt[24], g_jobs;
 
 const char *vgpu_backend_name(void) { return vgpu_backend_iokit.name; }
+
+static int open_anon_fd(struct stat *out_st)
+{
+    char buf[256];
+    const char *tmp = getenv("TMPDIR");
+    snprintf(buf, sizeof(buf), "%s/vgpu-dev-XXXXXX", tmp ? tmp : "/tmp");
+    int fd = mkstemp(buf);
+    if (fd < 0) {
+        snprintf(buf, sizeof(buf), "/tmp/vgpu-dev-XXXXXX");
+        fd = mkstemp(buf);
+    }
+    if (fd < 0) return -errno;
+    unlink(buf);
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    if (fstat(fd, out_st) < 0) {
+        int e = errno;
+        close(fd);
+        return -e;
+    }
+    return fd;
+}
 
 int vgpu_open(void)
 {
     void *conn = NULL;
     int err = vgpu_backend_iokit.open(&conn);
     if (err) return err;
-    int fd = open("/dev/null", O_RDWR | O_CLOEXEC);
-    if (fd < 0 || fd >= MAX_FDS) {
-        int e = fd < 0 ? errno : EMFILE;
-        if (fd >= 0) close(fd);
+
+    struct stat st;
+    int fd = open_anon_fd(&st);
+    if (fd < 0) {
         vgpu_backend_iokit.close(conn);
-        return -e;
+        return fd;
     }
+
     pthread_mutex_lock(&g_lock);
-    g_conn[fd] = conn;
+    int slot = -1;
+    for (int i = 0; i < MAX_CONNS; i++) {
+        if (!g_conns[i].used) { slot = i; break; }
+    }
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_lock);
+        close(fd);
+        vgpu_backend_iokit.close(conn);
+        return -EMFILE;
+    }
+    g_conns[slot] = (ConnEntry){
+        .used = true,
+        .id = g_next_id++,
+        .dev = st.st_dev,
+        .ino = st.st_ino,
+        .conn = conn,
+    };
     pthread_mutex_unlock(&g_lock);
     return fd;
 }
 
-static void *lookup(int fd)
+static void *lookup_entry(int fd, uint64_t *out_id)
 {
-    if (fd < 0 || fd >= MAX_FDS) return NULL;
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) < 0) return NULL;
+
     pthread_mutex_lock(&g_lock);
-    void *c = g_conn[fd];
+    for (int i = 0; i < MAX_CONNS; i++) {
+        if (g_conns[i].used && g_conns[i].dev == st.st_dev && g_conns[i].ino == st.st_ino) {
+            void *c = g_conns[i].conn;
+            if (out_id) *out_id = g_conns[i].id;
+            pthread_mutex_unlock(&g_lock);
+            return c;
+        }
+    }
     pthread_mutex_unlock(&g_lock);
-    return c;
+    return NULL;
+}
+
+static void *lookup(int fd) { return lookup_entry(fd, NULL); }
+
+uint64_t vgpu_conn_id(int fd)
+{
+    uint64_t id = 0;
+    lookup_entry(fd, &id);
+    return id;
 }
 
 bool vgpu_is_fd(int fd) { return lookup(fd) != NULL; }
 
 int vgpu_close(int fd)
 {
-    void *conn = lookup(fd);
-    if (!conn) return -EBADF;
-    pthread_mutex_lock(&g_lock);
-    g_conn[fd] = NULL;
-    pthread_mutex_unlock(&g_lock);
-    vgpu_backend_iokit.close(conn);
+    if (fd < 0) return -EBADF;
+    struct stat st;
+    if (fstat(fd, &st) < 0) return -EBADF;
+
     close(fd);
+
+    /* Check if any dup()'d fd still references the same inode */
+    bool still_open = false;
+    for (int other = 0; other < 1024; other++) {
+        struct stat ost;
+        if (fstat(other, &ost) == 0 && ost.st_dev == st.st_dev && ost.st_ino == st.st_ino) {
+            still_open = true;
+            break;
+        }
+    }
+
+    void *conn = NULL;
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < MAX_CONNS; i++) {
+        if (g_conns[i].used && g_conns[i].dev == st.st_dev && g_conns[i].ino == st.st_ino) {
+            if (!still_open) {
+                conn = g_conns[i].conn;
+                g_conns[i].used = false;
+                g_conns[i].conn = NULL;
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_lock);
+
+    if (conn) vgpu_backend_iokit.close(conn);
     return 0;
 }
 
@@ -117,6 +209,7 @@ int vgpu_munmap(int fd, void *addr, size_t size)
     return vgpu_backend_iokit.munmap(conn, addr, size);
 }
 """)
+
 
 # Update vmg_screen.c: use fd_drm_screen_create_renderonly + disable Valhall ISA runtime branch
 p_scr = f"{gpu_dir}/driver/vmg_screen.c"
