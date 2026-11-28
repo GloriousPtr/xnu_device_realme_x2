@@ -159,7 +159,7 @@ static int io_open(void **conn)
 	io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("SweetGPU"));
 	if (!s) return -ENODEV;
 	io_connect_t c = 0;
-	kern_return_t kr = IOServiceOpen(s, mach_task_self(), 0, &c);
+	kern_return_t kr = IOServiceOpen(s, mach_task_self(), 0x76677075u, &c);
 	IOObjectRelease(s);
 	if (kr) return -ENODEV;
 	*conn = (void *)(uintptr_t)c;
