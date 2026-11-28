@@ -255,7 +255,7 @@ s = re.sub(
             .options_info = &info,
         };
         dev->screen = fd_drm_screen_create_renderonly(dev->fd, NULL, &config);
-        dev->panfrost = true;''',
+        dev->panfrost = false;''',
     s, count=1, flags=re.S)
 s = s.replace('if (dev->panfrost) {\n        vmg_isa_options iopt;', 'if (0) {\n        vmg_isa_options iopt;')
 s = s.replace('if (d->fragment && d->fragment->isa_in)', 'if (0 && d->fragment && d->fragment->isa_in)')
